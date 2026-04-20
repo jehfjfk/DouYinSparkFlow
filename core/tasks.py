@@ -14,6 +14,11 @@ logger = setup_logger(level=config.get("logLevel", "Info"))
 matchMode = config.get("matchMode", "nickname")
 userIDDict = {}
 
+CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
+CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
+CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
+CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+
 
 class AuthenticationRequiredError(RuntimeError):
     pass
@@ -100,10 +105,8 @@ def checkTargetName(targetName, targets):
 def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
-    target_selector = 'xpath=//*[@class="conversationConversationItemwrapper"]'
-    scrollable_friends_selector = (
-        'xpath=//*[@class="conversationConversationListwrapper"]'
-    )
+    target_selector = CONVERSATION_ITEM_SELECTOR
+    scrollable_friends_selector = CONVERSATION_LIST_SELECTOR
     # [修复] 使用模糊匹配 no-more-tip- 前缀，不再依赖精确哈希后缀
     # 同时增加文本匹配作为兜底
     # no_more_selector = 'xpath=//div[contains(@class, "no-more-tip-")]'
@@ -130,9 +133,7 @@ def scroll_and_select_user(page, username, targets):
         for element in target_elements:
             try:
                 # 查找子元素 span，模糊匹配 class
-                span = element.locator(
-                    """xpath=.//div[@class="conversationConversationItemtitle"]"""
-                )
+                span = element.locator(CONVERSATION_TITLE_SELECTOR)
                 targetName = span.inner_text()
 
                 if targetName in found_targets:
@@ -263,7 +264,7 @@ def do_user_task(browser, username, cookies, targets):
     for username in scroll_and_select_user(page, username, targets):
         logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
         # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
-        chat_input_selector = "xpath=//div[@class='messageEditorimChatEditorContainer']"
+        chat_input_selector = CHAT_EDITOR_SELECTOR
         page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
         chat_input = page.locator(chat_input_selector)
 
