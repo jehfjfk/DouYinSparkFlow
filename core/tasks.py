@@ -18,6 +18,12 @@ CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+CHAT_URL = "https://www.douyin.com/chat"
+WINDOWS_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
 
 
 class AuthenticationRequiredError(RuntimeError):
@@ -33,6 +39,47 @@ def save_failure_screenshot(page, name):
         logger.error(f"当前页面: {page.url}，失败截图已保存至 {path}")
     except Exception as error:
         logger.error(f"保存失败截图时出错: {error}")
+
+
+def wait_for_chat_ready(page, timeout=30000):
+    """等待主站会话列表加载，并区分登录失效与普通加载超时。"""
+    conversation_list = page.locator(CONVERSATION_LIST_SELECTOR)
+    try:
+        conversation_list.wait_for(state="visible", timeout=timeout)
+        return
+    except Exception as error:
+        login_markers = ("扫码登录", "手机号登录", "登录后即可聊天")
+        for text in login_markers:
+            marker = page.get_by_text(text, exact=False)
+            try:
+                if marker.count() > 0 and marker.first.is_visible():
+                    raise AuthenticationRequiredError(
+                        "Cookie 未能登录抖音主站，请重新导出登录态"
+                    ) from error
+            except AuthenticationRequiredError:
+                raise
+            except Exception:
+                continue
+        raise TimeoutError(f"会话列表加载超时，当前页面: {page.url}") from error
+
+
+def open_chat_page(page):
+    last_error = None
+    for attempt in range(1, config["taskRetryTimes"] + 1):
+        try:
+            page.goto(CHAT_URL, wait_until="domcontentloaded")
+            wait_for_chat_ready(page)
+            return
+        except Exception as error:
+            last_error = error
+            logger.warning(f"第 {attempt}/{config['taskRetryTimes']} 次打开聊天页失败: {error}")
+            if isinstance(error, AuthenticationRequiredError):
+                save_failure_screenshot(page, "authentication-required")
+                raise
+            if attempt < config["taskRetryTimes"]:
+                time.sleep(3)
+    save_failure_screenshot(page, "chat-page-timeout")
+    raise last_error
 
 
 def handle_response(response: Response):
@@ -233,7 +280,13 @@ def scroll_and_select_user(page, username, targets):
 
 
 def do_user_task(browser, username, cookies, targets):
-    context = browser.new_context()  # 每个任务使用独立的上下文
+    context = browser.new_context(
+        user_agent=WINDOWS_CHROME_USER_AGENT,
+        locale="zh-CN",
+        timezone_id="Asia/Shanghai",
+        viewport={"width": 1440, "height": 900},
+        extra_http_headers={"Accept-Language": "zh-CN,zh;q=0.9"},
+    )  # 每个任务使用独立的上下文
     context.set_default_navigation_timeout(
         config["browserTimeout"]
     )  # 设置导航超时时间为 120 秒
@@ -248,16 +301,7 @@ def do_user_task(browser, username, cookies, targets):
     # 注入 Cookie
     context.add_cookies(cookies)
 
-    # 打开抖音网页聊天页面
-    retry_operation(
-        "打开抖音网页聊天页面",
-        page.goto,
-        retries=config["taskRetryTimes"],
-        delay=5,
-        url="https://www.douyin.com/chat",
-    )
-
-    time.sleep(5)  # 等待5秒让过可能存在的弹窗
+    open_chat_page(page)
 
     logger.debug(f"账号 {username} 开始发送消息")
     # 滚动并选择用户
