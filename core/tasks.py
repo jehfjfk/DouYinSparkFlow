@@ -35,7 +35,7 @@ def save_failure_screenshot(page, name):
     os.makedirs("logs", exist_ok=True)
     path = os.path.join("logs", f"{name}.png")
     try:
-        page.screenshot(path=path, full_page=True)
+        page.screenshot(path=path, timeout=10000, animations="disabled")
         logger.error(f"当前页面: {page.url}，失败截图已保存至 {path}")
     except Exception as error:
         logger.error(f"保存失败截图时出错: {error}")
