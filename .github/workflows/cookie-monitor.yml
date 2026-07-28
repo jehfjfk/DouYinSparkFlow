@@ -1,0 +1,60 @@
+name: Douyin Cookie Health Check
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 */6 * * *"
+concurrency:
+  group: douyin-cookie-monitor
+  cancel-in-progress: false
+jobs:
+  check-cookie:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    environment: user-data
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: playwright install chromium --with-deps --only-shell
+      - name: Export configuration
+        env:
+          VARS_JSON: ${{ toJson(vars) }}
+          SECRETS_JSON: ${{ toJson(secrets) }}
+        run: python utils/export_github_env.py
+      - name: Check Cookie login state
+        run: python -m scripts.check_cookie
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: cookie-check-logs
+          path: logs/
+          retention-days: 14
+  notify-cookie-failure:
+    if: ${{ always() && needs.check-cookie.result == 'failure' }}
+    needs: check-cookie
+    runs-on: ubuntu-latest
+    environment: user-data
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v5
+        with:
+          name: cookie-check-logs
+          path: logs
+      - name: Send Cookie expiration email
+        env:
+          MAIL_ADDRESS: ${{ vars.MAIL_ADDRESS }}
+          MAIL_USERNAME: ${{ vars.MAIL_USERNAME }}
+          MAIL_SMTP_HOST: ${{ vars.MAIL_SMTP_HOST }}
+          MAIL_SMTP_PORT: ${{ vars.MAIL_SMTP_PORT }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python utils/email_alert.py
+          --subject "抖音 Cookie 已失效"
+          --body "Cookie 登录状态检查失败，请重新导出 Cookie。运行记录：$RUN_URL"
+          --attachment-dir logs
