@@ -1,6 +1,12 @@
 name: Douyin Cookie Health Check
 on:
   workflow_dispatch:
+    inputs:
+      send_test_email:
+        description: "发送中文测试邮件"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "15 */6 * * *"
 concurrency:
@@ -58,3 +64,23 @@ jobs:
           --subject "抖音 Cookie 已失效"
           --body "Cookie 登录状态检查失败，请重新导出 Cookie。运行记录：$RUN_URL"
           --attachment-dir logs
+  test-email:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.send_test_email }}
+    runs-on: ubuntu-latest
+    environment: user-data
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Send Chinese test email
+        env:
+          MAIL_ADDRESS: ${{ vars.MAIL_ADDRESS }}
+          MAIL_USERNAME: ${{ vars.MAIL_USERNAME }}
+          MAIL_SMTP_HOST: ${{ vars.MAIL_SMTP_HOST }}
+          MAIL_SMTP_PORT: ${{ vars.MAIL_SMTP_PORT }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+        run: >-
+          python utils/email_alert.py
+          --subject "抖音续火花提醒配置成功"
+          --body "邮件提醒已成功配置。Cookie 每 6 小时检查一次；Cookie 失效或每日续火任务失败时，将发送中文提醒邮件。"

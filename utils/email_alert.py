@@ -47,9 +47,23 @@ def send_alert(subject, body, attachment_dir=None):
                 path.read_bytes(), maintype=main_type, subtype=sub_type, filename=path.name
             )
 
-    with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
-        smtp.login(username, password)
-        smtp.send_message(message)
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+                smtp.login(username, password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                smtp.starttls()
+                smtp.login(username, password)
+                smtp.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        if host != "smtp.qq.com" or port != 465:
+            raise
+        with smtplib.SMTP(host, 587, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(username, password)
+            smtp.send_message(message)
 
 
 def main():
