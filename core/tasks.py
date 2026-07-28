@@ -6,6 +6,7 @@ from core.browser import get_browser
 from playwright.sync_api import Response
 import time
 import json
+import os
 
 
 complates = {}
@@ -15,6 +16,55 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 matchMode = config.get("matchMode", "nickname")
 userIDDict = {}
+
+
+def save_failure_screenshot(page, name):
+    """保存失败页面，供 GitHub Actions 日志产物排查。"""
+    os.makedirs("logs", exist_ok=True)
+    path = os.path.join("logs", f"{name}.png")
+    try:
+        page.screenshot(path=path, full_page=True)
+        logger.error(f"当前页面: {page.url}，失败截图已保存至 {path}")
+    except Exception as error:
+        logger.error(f"保存失败截图时出错: {error}")
+
+
+def find_friends_tab(page, timeout=30000):
+    """兼容不同版本创作者中心 DOM，定位“朋友私信”标签。"""
+    candidates = [
+        page.get_by_role("tab", name="朋友私信", exact=True),
+        page.get_by_text("朋友私信", exact=True),
+        page.locator('xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'),
+    ]
+    deadline = time.time() + timeout / 1000
+    while time.time() < deadline:
+        for locator in candidates:
+            try:
+                if locator.count() == 1 and locator.is_visible():
+                    return locator
+            except Exception:
+                continue
+        time.sleep(0.5)
+    raise TimeoutError(f"等待朋友私信标签超时，当前页面: {page.url}")
+
+
+def open_friends_tab(page, retries=3):
+    """打开朋友私信；页面偶发空白时自动重载。"""
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            friends_tab = find_friends_tab(page)
+            friends_tab.click()
+            logger.debug("已进入朋友私信标签")
+            return
+        except Exception as error:
+            last_error = error
+            logger.warning(f"第 {attempt}/{retries} 次打开朋友私信失败: {error}")
+            if attempt < retries:
+                page.reload(wait_until="domcontentloaded")
+                time.sleep(3)
+    save_failure_screenshot(page, "friends-tab-timeout")
+    raise last_error
 
 def handle_response(response: Response):
     """
@@ -67,7 +117,6 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
 def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
-    friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
     target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
     scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
     
@@ -80,9 +129,7 @@ def scroll_and_select_user(page, username, targets):
     logger.debug(f"账号 {username} 目标好友列表: {targets}")
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
-    # 点击好友标签页
-    page.wait_for_selector(friends_tab_selector)
-    page.locator(friends_tab_selector).click()
+    open_friends_tab(page, retries=config["taskRetryTimes"])
 
     logger.debug(f"账号 {username} 进入好友列表页面")
 
