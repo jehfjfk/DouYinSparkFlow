@@ -1,4 +1,7 @@
 name: DouYin Spark Flow Schedule Run
+concurrency:
+  group: douyin-spark-flow
+  cancel-in-progress: false
 on:
   workflow_dispatch: # 允许手动触发
   schedule: # 定时任务
@@ -9,9 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: user-data
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
     - name: Test Douyin Accessibility
@@ -35,6 +38,7 @@ jobs:
       with:
         name: run-logs
         path: logs/
+        retention-days: 14
   workflow-keepalive:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest

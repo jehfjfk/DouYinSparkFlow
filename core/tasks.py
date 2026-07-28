@@ -30,6 +30,19 @@ class AuthenticationRequiredError(RuntimeError):
     pass
 
 
+class TargetNotFoundError(RuntimeError):
+    pass
+
+
+def ensure_all_targets_found(username, remaining_targets):
+    if not remaining_targets:
+        return
+    missing = ", ".join(sorted(remaining_targets))
+    raise TargetNotFoundError(
+        f"账号 {username} 有 {len(remaining_targets)} 个目标好友未找到: {missing}"
+    )
+
+
 def save_failure_screenshot(page, name):
     """保存失败页面，供 GitHub Actions 日志产物排查。"""
     os.makedirs("logs", exist_ok=True)
@@ -278,6 +291,8 @@ def scroll_and_select_user(page, username, targets):
                 logger.error(f"账号 {username} 未找到滚动容器，退出")
                 break
 
+    ensure_all_targets_found(username, remaining_targets)
+
 
 def do_user_task(browser, username, cookies, targets):
     context = browser.new_context(
@@ -301,32 +316,37 @@ def do_user_task(browser, username, cookies, targets):
     # 注入 Cookie
     context.add_cookies(cookies)
 
-    open_chat_page(page)
+    try:
+        open_chat_page(page)
 
-    logger.debug(f"账号 {username} 开始发送消息")
-    # 滚动并选择用户
-    for username in scroll_and_select_user(page, username, targets):
-        logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
-        # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
-        chat_input_selector = CHAT_EDITOR_SELECTOR
-        page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
-        chat_input = page.locator(chat_input_selector)
+        logger.debug(f"账号 {username} 开始发送消息")
+        sent_count = 0
+        for target_name in scroll_and_select_user(page, username, targets):
+            chat_input_selector = CHAT_EDITOR_SELECTOR
+            page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
+            chat_input = page.locator(chat_input_selector)
 
-        # 在 chat-input-dccKiL 中输入内容
-        message = build_message()
-        for line in message.split("\\n"):
-            chat_input.type(line)  # 输入每一行
-            # 如果不是最后一行，模拟 Shift+Enter 插入换行
-            if line != message.split("\\n")[-1]:
-                chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
+            message = build_message()
+            lines = message.split("\\n")
+            for index, line in enumerate(lines):
+                chat_input.type(line)
+                if index < len(lines) - 1:
+                    chat_input.press("Shift+Enter")
 
-        logger.debug(f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}")
-        logger.debug(f"账号 {username} 给好友 {username} 发送消息完成")
-        # 模拟按下回车键发送消息
-        chat_input.press("Enter")
-        time.sleep(2)  # 发送完等待一会儿
+            chat_input.press("Enter")
+            sent_count += 1
+            logger.info(
+                f"账号 {username} 已向好友 {target_name} 发送消息 "
+                f"({sent_count}/{len(targets)})"
+            )
+            time.sleep(2)
 
-    context.close()  # 任务完成后关闭上下文
+        logger.info(f"账号 {username} 已完成全部 {sent_count} 个目标好友的发送")
+    except Exception:
+        save_failure_screenshot(page, "task-failure")
+        raise
+    finally:
+        context.close()
 
 
 def runTasks():
