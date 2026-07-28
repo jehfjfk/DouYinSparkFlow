@@ -18,6 +18,10 @@ matchMode = config.get("matchMode", "nickname")
 userIDDict = {}
 
 
+class AuthenticationRequiredError(RuntimeError):
+    pass
+
+
 def save_failure_screenshot(page, name):
     """保存失败页面，供 GitHub Actions 日志产物排查。"""
     os.makedirs("logs", exist_ok=True)
@@ -36,8 +40,22 @@ def find_friends_tab(page, timeout=30000):
         page.get_by_text("朋友私信", exact=True),
         page.locator('xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'),
     ]
+    login_markers = [
+        page.get_by_text("扫码登录", exact=True),
+        page.get_by_text("登录/注册", exact=True),
+    ]
     deadline = time.time() + timeout / 1000
     while time.time() < deadline:
+        for marker in login_markers:
+            try:
+                if marker.count() > 0 and marker.is_visible():
+                    raise AuthenticationRequiredError(
+                        "Cookie 已失效，创作者中心要求重新登录"
+                    )
+            except AuthenticationRequiredError:
+                raise
+            except Exception:
+                continue
         for locator in candidates:
             try:
                 if locator.count() == 1 and locator.is_visible():
@@ -60,6 +78,9 @@ def open_friends_tab(page, retries=3):
         except Exception as error:
             last_error = error
             logger.warning(f"第 {attempt}/{retries} 次打开朋友私信失败: {error}")
+            if isinstance(error, AuthenticationRequiredError):
+                save_failure_screenshot(page, "authentication-required")
+                raise
             if attempt < retries:
                 page.reload(wait_until="domcontentloaded")
                 time.sleep(3)
