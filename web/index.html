@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark"><span></span><i></i></div><div><strong>Spark Flow</strong><small>抖音续火花</small></div></div>
+      <nav aria-label="主导航">
+        <button class="nav-item active" data-view="overview"><span>⌂</span>概览</button>
+        <button class="nav-item" data-view="accounts"><span>◎</span>账号与好友</button>
+        <button class="nav-item" data-view="message"><span>✎</span>消息设置</button>
+        <button class="nav-item" data-view="runtime"><span>▶</span>运行控制</button>
+        <button class="nav-item" data-view="logs"><span>≡</span>运行日志</button>
+      </nav>
+      <div class="sidebar-art"><img src="/assets/cover.png" alt="抖音与自动化工作流"></div>
+      <div class="sidebar-foot"><span class="dot"></span>仅本机访问 <code>127.0.0.1</code></div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menuButton" title="打开导航">☰</button>
+        <div><h1 id="pageTitle">运行概览</h1><p id="pageSubtitle">检查账号状态并启动今日任务</p></div>
+        <div class="top-actions"><span class="status-pill" id="statusPill"><i></i><span>正在检查</span></span><button class="button secondary" id="saveButton">保存配置</button></div>
+      </header>
+      <div class="content">
+        <section class="view active" data-view-panel="overview">
+          <div class="metric-grid">
+            <article class="metric"><span>已配置账号</span><strong id="metricAccounts">--</strong><small>可运行账号</small></article>
+            <article class="metric"><span>目标好友</span><strong id="metricTargets">--</strong><small>本次发送范围</small></article>
+            <article class="metric"><span>Cookie 状态</span><strong id="metricCookies">--</strong><small id="cookieHint">登录凭证</small></article>
+            <article class="metric accent"><span>任务状态</span><strong id="metricRuntime">待机</strong><small id="runtimeHint">尚未启动</small></article>
+          </div>
+          <div class="split-grid">
+            <section class="panel run-panel">
+              <div class="panel-heading"><div><h2>今日任务</h2><p>向配置列表中的好友发送续火花消息</p></div><span class="eyebrow" id="todayDate"></span></div>
+              <div class="message-preview"><span>消息预览</span><p id="overviewMessage">加载中...</p></div>
+              <div class="target-preview" id="overviewTargets"></div>
+              <div class="action-row"><button class="button primary" id="overviewRun">▶&nbsp; 启动任务</button><button class="button danger hidden" id="overviewStop">■&nbsp; 停止任务</button><button class="button ghost" data-jump="accounts">检查好友列表</button></div>
+              <p class="run-warning">启动后会真实发送消息，请先确认目标和模板。</p>
+            </section>
+            <section class="panel activity-panel">
+              <div class="panel-heading"><div><h2>最近活动</h2><p>任务日志的最新事件</p></div><button class="text-button" data-jump="logs">查看全部</button></div>
+              <div class="activity-list" id="recentActivity"><div class="empty">暂无日志</div></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-view-panel="accounts">
+          <div class="section-intro"><div><h2>账号与目标好友</h2><p>Cookie 只保存在本机 .env，已有值不会回显到页面。</p></div><button class="button secondary" id="addAccount">＋ 添加账号</button></div>
+          <div id="accountList" class="account-list"></div>
+        </section>
+        <section class="view" data-view-panel="message">
+          <div class="settings-grid">
+            <section class="panel form-panel">
+              <div class="panel-heading"><div><h2>消息模板</h2><p>使用 <code>[API]</code> 插入每日一言</p></div><span class="counter" id="messageCounter">0 字</span></div>
+              <label class="field"><span>发送内容</span><textarea id="messageTemplate" rows="8"></textarea></label>
+              <div class="field"><span>每日一言类型</span><div class="check-grid" id="hitokotoTypes"></div></div>
+            </section>
+            <section class="panel preview-panel">
+              <div class="panel-heading"><div><h2>聊天预览</h2><p>实际的一言内容会在运行时生成</p></div></div>
+              <div class="phone-preview"><div class="phone-head"><span></span><strong>目标好友</strong><i>•••</i></div><div class="chat-space"><div class="bubble" id="messagePreview"></div><small>现在</small></div><div class="fake-input">发送消息...</div></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-view-panel="runtime">
+          <div class="settings-grid">
+            <section class="panel form-panel">
+              <div class="panel-heading"><div><h2>运行参数</h2><p>网络稳定时建议保持默认值</p></div></div>
+              <div class="two-cols">
+                <label class="field"><span>好友匹配方式</span><select id="matchMode"><option value="nickname">原始昵称</option><option value="short_id">抖音号</option></select></label>
+                <label class="field"><span>日志级别</span><select id="logLevel"><option>Debug</option><option>Info</option><option>Warning</option><option>Error</option></select></label>
+                <label class="field"><span>浏览器超时（毫秒）</span><input id="browserTimeout" type="number" min="10000" step="1000"></label>
+                <label class="field"><span>好友列表等待（毫秒）</span><input id="friendListWaitTime" type="number" min="500" step="100"></label>
+                <label class="field"><span>任务重试次数</span><input id="taskRetryTimes" type="number" min="1" max="10"></label>
+              </div>
+            </section>
+            <section class="panel control-panel">
+              <div class="runtime-orbit"><span id="runtimeIcon">▶</span></div><h2 id="runtimeTitle">任务待机</h2><p id="runtimeDescription">配置保存后即可开始发送</p>
+              <button class="button primary wide" id="runtimeRun">▶&nbsp; 启动任务</button><button class="button danger wide hidden" id="runtimeStop">■&nbsp; 停止任务</button>
+              <dl><div><dt>进程 ID</dt><dd id="runtimePid">--</dd></div><div><dt>启动时间</dt><dd id="runtimeStarted">--</dd></div><div><dt>上次退出码</dt><dd id="runtimeExit">--</dd></div></dl>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-view-panel="logs">
+          <section class="panel log-panel">
+            <div class="panel-heading"><div><h2>运行日志</h2><p>自动刷新最近 300 条记录</p></div><div class="log-actions"><label><input type="checkbox" id="autoScroll" checked> 自动滚动</label><button class="button ghost" id="refreshLogs">刷新</button></div></div>
+            <div class="log-console" id="logConsole"><div class="empty">暂无日志</div></div>
+          </section>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <div class="modal-backdrop hidden" id="confirmModal"><div class="modal"><div class="modal-icon">!</div><h2>确认启动任务</h2><p>将向所有已配置目标真实发送消息。请确认账号、好友和消息模板均无误。</p><div class="modal-actions"><button class="button secondary" id="cancelRun">取消</button><button class="button primary" id="confirmRun">确认并启动</button></div></div></div>
+  <script src="/app.js"></script>
+</body>
+</html>
