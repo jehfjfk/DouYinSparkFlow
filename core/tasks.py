@@ -123,6 +123,40 @@ def handle_response(response: Response):
             print(f"文件: {last.filename}, 行号: {last.lineno}, 函数: {last.name}")
 
 
+def mapped_target_ids(targets):
+    target_set = set(targets)
+    return {
+        value
+        for values in userIDDict.values()
+        for value in values
+        if value and value in target_set
+    }
+
+
+def wait_for_identity_mapping(page, targets, timeout=5000):
+    deadline = time.monotonic() + timeout / 1000
+    while time.monotonic() < deadline:
+        matched = mapped_target_ids(targets)
+        if len(matched) == len(set(targets)):
+            return matched
+        page.wait_for_timeout(200)
+    return mapped_target_ids(targets)
+
+
+def prepare_identity_mapping(page, targets):
+    """等待资料接口；完全无映射时重载一次聊天页再等待。"""
+    matched = wait_for_identity_mapping(page, targets)
+    if matched:
+        logger.info(f"抖音号实时映射已加载 {len(matched)}/{len(targets)}")
+        return
+
+    logger.warning("未获取到抖音号实时映射，重新加载聊天页后重试一次")
+    page.reload(wait_until="domcontentloaded")
+    wait_for_chat_ready(page)
+    matched = wait_for_identity_mapping(page, targets)
+    logger.info(f"重新加载后抖音号实时映射已加载 {len(matched)}/{len(targets)}")
+
+
 def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
     """
     通用的重试逻辑
@@ -144,25 +178,32 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
                 logger.error(f"{name} 失败，已达到最大重试次数，错误：{e}")
                 raise
 
-def checkTargetName(targetName, targets):
-    """检查targetName是否为目标
-    """
-    
-    targetSymbol = None
-    
-    targetName = norm(targetName)
-    
-    if targetName in userIDDict:
-        matched = next((v for v in userIDDict[targetName] if v and v in targets), None)
-        if matched is not None:
-            targetSymbol = matched
-    else:
-        if targetName in targets:
-            targetSymbol = targetName
-    return targetSymbol
+def checkTargetName(targetName, targets, target_aliases=None, identity_map=None):
+    """按实时抖音号、直接名称、持久化别名的顺序匹配目标。"""
+    target_name = norm(targetName)
+    target_set = set(targets)
+    identity_map = userIDDict if identity_map is None else identity_map
+    target_aliases = target_aliases or {}
+
+    if target_name in identity_map:
+        matched = next(
+            (value for value in identity_map[target_name] if value and value in target_set),
+            None,
+        )
+        if matched:
+            return matched
+
+    if target_name in target_set:
+        return target_name
+
+    for target_id, aliases in target_aliases.items():
+        if target_id in target_set and target_name in aliases:
+            logger.info(f"使用持久化别名 {target_name} 匹配抖音号 {target_id}")
+            return target_id
+    return None
 
 
-def scroll_and_select_user(page, username, targets):
+def scroll_and_select_user(page, username, targets, target_aliases=None):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
     target_selector = CONVERSATION_ITEM_SELECTOR
@@ -202,7 +243,7 @@ def scroll_and_select_user(page, username, targets):
 
                 logger.debug(f"账号 {username} 找到好友 {targetName}")
                 
-                targetSymbol = checkTargetName(targetName, targets)
+                targetSymbol = checkTargetName(targetName, targets, target_aliases)
 
                 if targetSymbol:
                     element.click()
@@ -294,7 +335,9 @@ def scroll_and_select_user(page, username, targets):
     ensure_all_targets_found(username, remaining_targets)
 
 
-def do_user_task(browser, username, cookies, targets):
+def do_user_task(browser, username, cookies, targets, target_aliases=None):
+    global userIDDict
+    userIDDict = {}
     context = browser.new_context(
         user_agent=WINDOWS_CHROME_USER_AGENT,
         locale="zh-CN",
@@ -318,10 +361,13 @@ def do_user_task(browser, username, cookies, targets):
 
     try:
         open_chat_page(page)
+        prepare_identity_mapping(page, targets)
 
         logger.debug(f"账号 {username} 开始发送消息")
         sent_count = 0
-        for target_name in scroll_and_select_user(page, username, targets):
+        for target_name in scroll_and_select_user(
+            page, username, targets, target_aliases
+        ):
             chat_input_selector = CHAT_EDITOR_SELECTOR
             page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
             chat_input = page.locator(chat_input_selector)
@@ -366,10 +412,11 @@ def runTasks():
         for user in userData:
             cookies = user["cookies"]
             targets = user["targets"]
+            target_aliases = user.get("target_aliases", {})
             username = user.get("username", "未知用户")
             logger.info(f"开始处理账号 {username}")
             # 创建任务
-            do_user_task(browser, username, cookies, targets)
+            do_user_task(browser, username, cookies, targets, target_aliases)
             logger.info(f"账号 {username} 任务完成")
     finally:
         # 关闭浏览器实例

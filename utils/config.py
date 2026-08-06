@@ -74,6 +74,32 @@ def sanitize_cookies(cookies):
     return cookies
 
 
+def normalize_targets(raw_targets):
+    """兼容旧字符串目标，并为抖音号目标保留持久化别名。"""
+    targets = []
+    aliases = {}
+    for entry in raw_targets:
+        if isinstance(entry, str):
+            target_id = norm(entry)
+            target_aliases = []
+        elif isinstance(entry, dict):
+            target_id = norm(
+                entry.get("id") or entry.get("unique_id") or entry.get("short_id")
+            )
+            target_aliases = list(entry.get("aliases") or [])
+            target_aliases += [entry.get("nickname"), entry.get("remark_name")]
+        else:
+            continue
+
+        if not target_id:
+            continue
+        targets.append(target_id)
+        aliases[target_id] = list(
+            dict.fromkeys(norm(alias) for alias in target_aliases if alias and norm(alias))
+        )
+    return targets, aliases
+
+
 def get_userData():
     """
     获取用户数据目录
@@ -107,12 +133,14 @@ def get_userData():
             logger.warning(f"{username} 的任务 {cookies_key} 格式不正确，已跳过")
             continue
 
+        targets, target_aliases = normalize_targets(task.get("targets", []))
         userData.append(
             {
                 "unique_id": unique_id,
                 "username": username,
                 "cookies": sanitize_cookies(cookies),
-                "targets": [norm(t) for t in task.get("targets", [])], # 标准化目标列表
+                "targets": targets,
+                "target_aliases": target_aliases,
             }
         )
 
