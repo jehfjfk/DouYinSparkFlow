@@ -297,6 +297,10 @@ def scan_pinned_account(account_index):
         for item in items:
             try:
                 title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
+                if not title:
+                    # The title node is initially empty while Vue hydrates; the rendered row text is available.
+                    row_lines = [task_core.norm(line) for line in item.inner_text().splitlines() if task_core.norm(line)]
+                    title = row_lines[0] if row_lines else ""
                 if not title or not is_pinned_item(item):
                     continue
                 item.click()
