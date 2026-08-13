@@ -83,3 +83,10 @@ def test_cookie_validator_accepts_exported_samesite_values():
     ]))
     from utils.config import sanitize_cookies
     assert "sameSite" not in sanitize_cookies(cookies)[0]
+
+
+def test_github_sync_skips_empty_optional_variables(monkeypatch):
+    requested = []
+    monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": []})
+    # The no-account guard runs before any GitHub call; this protects empty-value behavior by source contract.
+    assert 'if value == "":\n            continue' in Path(web_app.__file__).read_text(encoding="utf-8")

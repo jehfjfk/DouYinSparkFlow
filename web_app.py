@@ -217,6 +217,10 @@ def sync_github():
     variable_names = ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
     for name in variable_names:
         value = env.get(name, "")
+        # GitHub Environment Variables reject empty values. An absent optional value
+        # (such as PROXY_ADDRESS) must not prevent Cookie Secrets from being synced.
+        if value == "":
+            continue
         try:
             github_request("PATCH", f"{base}/variables/{name}", token, {"name": name, "value": value})
         except ValueError as exc:
