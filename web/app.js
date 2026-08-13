@@ -136,6 +136,28 @@ async function syncGithub(){
     toast("已同步 "+result.result.accounts+" 个账号到 GitHub");
   }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="同步到 GitHub";}
 }
+async function scanPinned(){
+  if(!state.config.accounts.length){toast("请先添加并保存一个账号",true);return;}
+  const index=prompt("扫描哪个账号？请输入序号（1-"+state.config.accounts.length+"）：", "1");
+  if(index===null)return;
+  try{
+    toast("正在打开创作者中心并扫描置顶会话...");
+    const result=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:Number(index)-1})});
+    state.scan=result.result;renderScanResults();toast("扫描完成，请确认后加入配置");
+  }catch(error){toast(error.message,true);}
+}
+function renderScanResults(){
+  $("#scanPanel").classList.remove("hidden");
+  $("#scanResults").innerHTML=(state.scan.contacts||[]).map((item,i)=>'<label class="scan-row"><input type="checkbox" data-scan-index="'+i+'" checked><span><strong>'+escapeHtml(item.uniqueId||item.shortId||"未获取抖音号")+'</strong><small>'+escapeHtml(item.nickname)+(item.remark&&item.remark!==item.nickname?' · '+escapeHtml(item.remark):'')+'</small></span></label>').join("")||'<div class="empty">没有读取到置顶会话</div>';
+}
+function importScanned(){
+  if(!state.scan)return;
+  const index=Number(prompt("加入哪个账号？请输入序号：", "1"))-1;
+  if(index<0||!state.config.accounts[index])return;
+  const selected=$$("[data-scan-index]:checked").map(input=>state.scan.contacts[Number(input.dataset.scanIndex)]).filter(item=>item.uniqueId||item.shortId);
+  selected.forEach(item=>{const id=item.uniqueId||item.shortId;const aliases=[item.nickname,item.remark].filter(Boolean);if(!state.config.accounts[index].targets.some(target=>target.id===id))state.config.accounts[index].targets.push({id,aliases});});
+  renderAccounts();toast("已加入 "+selected.length+" 个好友，请保存配置");
+}
 async function requestRun(){try{await saveConfig();$("#confirmModal").classList.remove("hidden");}catch(_error){}}
 async function startRun(){
   try{const result=await api("/api/run",{method:"POST",body:"{}"});state.status=result.status;$("#confirmModal").classList.add("hidden");renderStatus();toast("任务已启动");}
@@ -163,6 +185,9 @@ function bindStaticEvents(){
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
   $("#saveButton").addEventListener("click",saveConfig);
   $("#syncButton").addEventListener("click",syncGithub);
+  $("#openCreator").addEventListener("click",()=>window.open("https://creator.douyin.com/", "_blank", "noopener"));
+  $("#scanPinned").addEventListener("click",scanPinned);
+  $("#importScanned").addEventListener("click",importScanned);
   $("#messageTemplate").addEventListener("input",event=>{
     state.config.messageTemplate=event.target.value;
     $("#messageCounter").textContent=event.target.value.length+" 字";

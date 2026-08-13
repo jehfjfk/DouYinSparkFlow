@@ -229,6 +229,59 @@ def sync_github():
     return {"repository": GITHUB_REPOSITORY, "accounts": len(config["accounts"]), "secrets": len(active_secrets)}
 
 
+def scan_pinned_account(account_index):
+    """Read-only scan of pinned contacts using the selected account Cookie."""
+    from core.browser import get_browser
+    from core import tasks as task_core
+
+    config = public_config()
+    try:
+        account = config["accounts"][int(account_index)]
+    except (IndexError, TypeError, ValueError) as exc:
+        raise ValueError("账号不存在") from exc
+    cookies = parse_json(read_env().get(f"COOKIES_{account['uniqueId'].upper()}", "[]"), [])
+    if not cookies:
+        raise ValueError(f"账号 {account['username']} 尚未配置 Cookie")
+
+    task_core.userIDDict.clear()
+    playwright, browser = get_browser()
+    context = browser.new_context(
+        user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN",
+        timezone_id="Asia/Shanghai", viewport={"width": 1440, "height": 900},
+    )
+    context.set_default_timeout(config["browserTimeout"])
+    page = context.new_page()
+    page.on("response", task_core.handle_response)
+    results = []
+    try:
+        context.add_cookies(cookies)
+        page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
+        page.wait_for_timeout(1200)
+        task_core.open_chat_page(page)
+        page.wait_for_timeout(max(1000, config["friendListWaitTime"]))
+        items = page.locator(task_core.CONVERSATION_LIST_SELECTOR).locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
+        for item in items:
+            try:
+                title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
+                marker = (item.get_attribute("class") or "") + " " + (item.get_attribute("aria-label") or "")
+                if not title or ("pinned" not in marker.lower() and "置顶" not in marker and "置顶" not in item.inner_text()[:80]):
+                    continue
+                item.click()
+                page.wait_for_timeout(250)
+                identity = task_core.userIDDict.get(title, [])
+                results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
+            except Exception:
+                continue
+        if not results:
+            for title, identity in task_core.userIDDict.items():
+                results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": False})
+        return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True}
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+
 class TaskRunner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -359,6 +412,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"ok": True, "config": save_config(self.read_json())})
             if self.path == "/api/github/sync":
                 return self.json_response({"ok": True, "result": sync_github()})
+            if self.path == "/api/scan-pinned":
+                payload = self.read_json()
+                return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
             if self.path == "/api/run":
                 return self.json_response({"ok": True, "status": RUNNER.start()})
             if self.path == "/api/stop":
