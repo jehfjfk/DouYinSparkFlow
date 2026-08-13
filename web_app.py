@@ -143,8 +143,6 @@ def save_config(payload):
         targets = normalize_public_targets(account.get("targets", []))
         if not username or not unique_id:
             raise ValueError("用户名和抖音号不能为空")
-        if not targets:
-            raise ValueError(f"账号 {username} 至少需要一个目标好友")
         tasks.append({"username": username, "unique_id": unique_id, "targets": targets})
         cookie_raw = account.get("cookies")
         if cookie_raw:

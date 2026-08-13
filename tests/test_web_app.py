@@ -69,8 +69,9 @@ def test_legacy_string_targets_are_exposed_as_structured_targets(isolated_env):
     ]
 
 
-def test_account_requires_at_least_one_target(isolated_env):
-    with pytest.raises(ValueError, match="至少需要一个目标好友"):
-        web_app.save_config({
-            "accounts": [{"username": "朋友", "uniqueId": "theirs", "targets": []}]
-        })
+def test_account_can_be_saved_before_targets_are_added(isolated_env):
+    config = web_app.save_config({
+        "accounts": [{"username": "朋友", "uniqueId": "theirs", "targets": []}]
+    })
+    assert config["accounts"][0]["username"] == "朋友"
+    assert config["accounts"][0]["targets"] == []
