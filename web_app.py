@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
+import base64
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +19,8 @@ ENV_FILE = ROOT / ".env"
 LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
+GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
+GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 
 
 def read_env():
@@ -70,7 +75,7 @@ def public_config():
         accounts.append({
             "username": task.get("username", ""),
             "uniqueId": unique_id,
-            "targets": task.get("targets", []),
+            "targets": normalize_public_targets(task.get("targets", [])),
             "cookieConfigured": bool(cookies),
             "cookieCount": len(cookies) if isinstance(cookies, list) else 0,
         })
@@ -83,7 +88,21 @@ def public_config():
         "taskRetryTimes": int(env.get("TASK_RETRY_TIMES", "3")),
         "logLevel": env.get("LOG_LEVEL", "Info"),
         "accounts": accounts,
+        "github": {"repository": GITHUB_REPOSITORY, "environment": GITHUB_ENVIRONMENT},
     }
+
+
+def normalize_public_targets(targets):
+    result = []
+    for target in targets:
+        if isinstance(target, str):
+            result.append({"id": target, "aliases": []})
+        elif isinstance(target, dict):
+            target_id = str(target.get("id") or target.get("unique_id") or target.get("short_id") or "").strip()
+            aliases = [str(value).strip() for value in target.get("aliases", []) if str(value).strip()]
+            if target_id:
+                result.append({"id": target_id, "aliases": list(dict.fromkeys(aliases))})
+    return result
 
 
 def validate_cookie_json(raw):
@@ -118,9 +137,11 @@ def save_config(payload):
     for account in accounts:
         username = str(account.get("username", "")).strip()
         unique_id = str(account.get("uniqueId", "")).strip()
-        targets = [str(item).strip() for item in account.get("targets", []) if str(item).strip()]
+        targets = normalize_public_targets(account.get("targets", []))
         if not username or not unique_id:
             raise ValueError("用户名和抖音号不能为空")
+        if not targets:
+            raise ValueError(f"账号 {username} 至少需要一个目标好友")
         tasks.append({"username": username, "unique_id": unique_id, "targets": targets})
         cookie_raw = account.get("cookies")
         if cookie_raw:
@@ -130,6 +151,82 @@ def save_config(payload):
     updates["TASKS"] = json.dumps(tasks, ensure_ascii=False, separators=(",", ":"))
     write_env(updates)
     return public_config()
+
+
+def github_token():
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    if token:
+        return token.strip()
+    request = "protocol=https\nhost=github.com\n\n"
+    try:
+        result = subprocess.run(["git", "credential", "fill"], input=request, text=True, capture_output=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("未读取到 GitHub 登录凭证，请先在 GitHub Desktop 登录") from exc
+    values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    if not values.get("password"):
+        raise ValueError("未读取到 GitHub 登录凭证，请先在 GitHub Desktop 登录")
+    return values["password"]
+
+
+def github_request(method, path, token, payload=None):
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(f"https://api.github.com{path}", data=body, method=method, headers={
+        "Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json", "User-Agent": "DouYinSparkFlow-Web", "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(f"GitHub 同步失败（HTTP {exc.code}）：{detail[:240]}") from exc
+
+
+def encrypted_secret(value, public_key):
+    try:
+        from nacl import encoding, public
+    except ImportError as exc:
+        raise ValueError("缺少 PyNaCl 依赖，请运行 pip install -r requirements.txt") from exc
+    key = public.PublicKey(public_key.encode("utf-8"), encoding.Base64Encoder())
+    encrypted = public.SealedBox(key).encrypt(value.encode("utf-8"))
+    return base64.b64encode(encrypted).decode("ascii")
+
+
+def sync_github():
+    config = public_config()
+    if not config["accounts"]:
+        raise ValueError("请先保存至少一个账号")
+    env = read_env()
+    token = github_token()
+    owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
+    variable_names = ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
+    for name in variable_names:
+        value = env.get(name, "")
+        try:
+            github_request("PATCH", f"{base}/variables/{name}", token, {"name": name, "value": value})
+        except ValueError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+            github_request("POST", f"{base}/variables", token, {"name": name, "value": value})
+
+    key_info = github_request("GET", f"{base}/secrets/public-key", token)
+    active_secrets = set()
+    for account in config["accounts"]:
+        name = f"COOKIES_{account['uniqueId'].upper()}"
+        value = env.get(name)
+        if not value:
+            raise ValueError(f"账号 {account['username']} 缺少 Cookie")
+        github_request("PUT", f"{base}/secrets/{name}", token, {"encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"]})
+        active_secrets.add(name)
+
+    existing = github_request("GET", f"{base}/secrets?per_page=100", token).get("secrets", [])
+    for secret in existing:
+        name = secret.get("name", "")
+        if name.startswith("COOKIES_") and name not in active_secrets:
+            github_request("DELETE", f"{base}/secrets/{name}", token)
+    return {"repository": GITHUB_REPOSITORY, "accounts": len(config["accounts"]), "secrets": len(active_secrets)}
 
 
 class TaskRunner:
@@ -260,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/config":
                 return self.json_response({"ok": True, "config": save_config(self.read_json())})
+            if self.path == "/api/github/sync":
+                return self.json_response({"ok": True, "result": sync_github()})
             if self.path == "/api/run":
                 return self.json_response({"ok": True, "status": RUNNER.start()})
             if self.path == "/api/stop":

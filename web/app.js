@@ -30,14 +30,14 @@ function switchView(view){
   if(view==="logs")loadLogs();
 }
 function accountMarkup(account,index){
-  const targets=account.targets.map((target,i)=>'<span class="editable-chip">'+escapeHtml(target)+'<button data-action="remove-target" data-target-index="'+i+'" title="移除">×</button></span>').join("");
+  const targets=account.targets.map((target,i)=>'<span class="editable-chip"><strong>'+escapeHtml(target.id)+'</strong>'+(target.aliases.length?' · '+escapeHtml(target.aliases.join(" / ")):'')+'<button data-action="remove-target" data-target-index="'+i+'" title="移除">×</button></span>').join("");
   return '<article class="account-card" data-index="'+index+'">'+
-    '<div class="account-head"><span class="account-index">账号 '+String(index+1).padStart(2,"0")+'</span><span class="account-status">'+
-    (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span></div>'+
+    '<div class="account-head"><span class="account-index">账号 '+String(index+1).padStart(2,"0")+'</span><div><span class="account-status">'+
+    (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
-    '<div class="field full"><span>目标好友</span><div class="target-editor"><input data-role="target-input" placeholder="输入原始昵称，按回车添加"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+'</div></div>'+
+    '<div class="field full"><span>目标好友</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+'</div></div>'+
     '<div class="field full"><span>Cookie JSON</span><div class="cookie-row"><textarea data-field="cookies" placeholder="已有 Cookie 不会回显。仅在需要更新时粘贴新的 JSON。"></textarea><div class="cookie-badge"><strong>'+(account.cookieCount||0)+'</strong><span>'+(account.cookieConfigured?"已安全保存":"等待导入")+'</span></div></div></div>'+
     '</div></article>';
 }
@@ -53,12 +53,15 @@ function bindAccountEvents(){
       if(input.dataset.field!=="cookies")state.config.accounts[index][input.dataset.field]=input.value;
     }));
     const add=()=>{
-      const input=card.querySelector('[data-role="target-input"]');
-      const value=input.value.trim();
-      if(value&&!state.config.accounts[index].targets.includes(value)){state.config.accounts[index].targets.push(value);renderAccounts();}
+      const id=card.querySelector('[data-role="target-id"]').value.trim();
+      const aliases=card.querySelector('[data-role="target-aliases"]').value.split(/[，,]/).map(value=>value.trim()).filter(Boolean);
+      if(id&&!state.config.accounts[index].targets.some(target=>target.id===id)){state.config.accounts[index].targets.push({id,aliases});renderAccounts();}
     };
     card.querySelector('[data-action="add-target"]').addEventListener("click",add);
-    card.querySelector('[data-role="target-input"]').addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();add();}});
+    card.querySelectorAll('[data-role^="target-"]').forEach(input=>input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();add();}}));
+    card.querySelector('[data-action="remove-account"]').addEventListener("click",()=>{
+      if(confirm("删除此账号及好友配置？同步后对应 Cookie Secret 也会删除。")){state.config.accounts.splice(index,1);renderAccounts();}
+    });
     card.querySelectorAll('[data-action="remove-target"]').forEach(button=>button.addEventListener("click",()=>{
       state.config.accounts[index].targets.splice(Number(button.dataset.targetIndex),1);renderAccounts();
     }));
@@ -85,7 +88,7 @@ function renderOverview(){
   $("#cookieHint").textContent=ready===accounts.length?"全部账号可用":"存在未配置账号";
   $("#overviewMessage").textContent=state.config.messageTemplate;
   const targets=accounts.flatMap(a=>a.targets);
-  $("#overviewTargets").innerHTML=targets.slice(0,8).map(item=>'<span class="target-chip">'+escapeHtml(item)+'</span>').join("")+(targets.length>8?'<span class="target-chip more">+'+(targets.length-8)+"</span>":"");
+  $("#overviewTargets").innerHTML=targets.slice(0,8).map(item=>'<span class="target-chip">'+escapeHtml(item.id)+'</span>').join("")+(targets.length>8?'<span class="target-chip more">+'+(targets.length-8)+"</span>":"");
 }
 function renderStatus(){
   if(!state.status)return;
@@ -124,6 +127,15 @@ async function saveConfig(){
     state.config=result.config;renderAll();toast("配置已保存");
   }catch(error){toast(error.message,true);throw error;}
 }
+async function syncGithub(){
+  const button=$("#syncButton");
+  try{
+    button.disabled=true;button.textContent="正在同步...";
+    await saveConfig();
+    const result=await api("/api/github/sync",{method:"POST",body:"{}"});
+    toast("已同步 "+result.result.accounts+" 个账号到 GitHub");
+  }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="同步到 GitHub";}
+}
 async function requestRun(){try{await saveConfig();$("#confirmModal").classList.remove("hidden");}catch(_error){}}
 async function startRun(){
   try{const result=await api("/api/run",{method:"POST",body:"{}"});state.status=result.status;$("#confirmModal").classList.add("hidden");renderStatus();toast("任务已启动");}
@@ -150,6 +162,7 @@ function bindStaticEvents(){
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
   $("#saveButton").addEventListener("click",saveConfig);
+  $("#syncButton").addEventListener("click",syncGithub);
   $("#messageTemplate").addEventListener("input",event=>{
     state.config.messageTemplate=event.target.value;
     $("#messageCounter").textContent=event.target.value.length+" 字";
@@ -161,7 +174,7 @@ function bindStaticEvents(){
   $("#cancelRun").addEventListener("click",()=>$("#confirmModal").classList.add("hidden"));
   $("#confirmRun").addEventListener("click",startRun);
   $("#refreshLogs").addEventListener("click",loadLogs);
-  $("#addAccount").addEventListener("click",()=>{state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();});
+  $("#addAccount").addEventListener("click",()=>{state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
 }
 async function init(){
   bindStaticEvents();

@@ -24,7 +24,7 @@
       <header class="topbar">
         <button class="icon-button menu-button" id="menuButton" title="打开导航">☰</button>
         <div><h1 id="pageTitle">运行概览</h1><p id="pageSubtitle">检查账号状态并启动今日任务</p></div>
-        <div class="top-actions"><span class="status-pill" id="statusPill"><i></i><span>正在检查</span></span><button class="button secondary" id="saveButton">保存配置</button></div>
+        <div class="top-actions"><span class="status-pill" id="statusPill"><i></i><span>正在检查</span></span><button class="button secondary" id="saveButton">保存到本机</button><button class="button primary" id="syncButton">同步到 GitHub</button></div>
       </header>
       <div class="content">
         <section class="view active" data-view-panel="overview">
@@ -49,7 +49,7 @@
           </div>
         </section>
         <section class="view" data-view-panel="accounts">
-          <div class="section-intro"><div><h2>账号与目标好友</h2><p>Cookie 只保存在本机 .env，已有值不会回显到页面。</p></div><button class="button secondary" id="addAccount">＋ 添加账号</button></div>
+          <div class="section-intro"><div><h2>账号与目标好友</h2><p>Cookie 加密同步到 GitHub Secret，页面不会回显已有值。</p></div><button class="button secondary" id="addAccount">＋ 添加账号</button></div>
           <div id="accountList" class="account-list"></div>
         </section>
         <section class="view" data-view-panel="message">
