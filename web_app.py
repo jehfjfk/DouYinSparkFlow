@@ -246,6 +246,7 @@ def scan_pinned_account(account_index):
     """Read-only scan of pinned contacts using the selected account Cookie."""
     from core.browser import get_browser
     from core import tasks as task_core
+    from utils.config import sanitize_cookies
 
     config = public_config()
     try:
@@ -267,7 +268,7 @@ def scan_pinned_account(account_index):
     page.on("response", task_core.handle_response)
     results = []
     try:
-        context.add_cookies(cookies)
+        context.add_cookies(sanitize_cookies(cookies))
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
         task_core.open_chat_page(page)

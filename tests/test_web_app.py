@@ -75,3 +75,11 @@ def test_account_can_be_saved_before_targets_are_added(isolated_env):
     })
     assert config["accounts"][0]["username"] == "朋友"
     assert config["accounts"][0]["targets"] == []
+
+
+def test_cookie_validator_accepts_exported_samesite_values():
+    cookies = web_app.validate_cookie_json(json.dumps([
+        {"name": "sid", "value": "secret", "domain": ".douyin.com", "path": "/", "sameSite": "no_restriction"}
+    ]))
+    from utils.config import sanitize_cookies
+    assert "sameSite" not in sanitize_cookies(cookies)[0]
