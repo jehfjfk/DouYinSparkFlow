@@ -75,7 +75,7 @@ function renderMessage(){
   $$("#hitokotoTypes input").forEach(input=>input.addEventListener("change",()=>{state.config.hitokotoTypes=$$("#hitokotoTypes input:checked").map(el=>el.value);}));
 }
 function renderRuntimeForm(){
-  ["matchMode","logLevel","browserTimeout","friendListWaitTime","taskRetryTimes"].forEach(id=>$("#"+id).value=state.config[id]);
+  ["scheduleTime","matchMode","logLevel","browserTimeout","friendListWaitTime","taskRetryTimes"].forEach(id=>$("#"+id).value=state.config[id]);
 }
 function renderOverview(){
   if(!state.config)return;
@@ -116,7 +116,7 @@ function collectConfig(){
       cookies:(card&&card.querySelector('[data-field="cookies"]').value.trim())||""
     });
   });
-  ["matchMode","logLevel"].forEach(id=>config[id]=$("#"+id).value);
+  ["scheduleTime","matchMode","logLevel"].forEach(id=>config[id]=$("#"+id).value);
   ["browserTimeout","friendListWaitTime","taskRetryTimes"].forEach(id=>config[id]=Number($("#"+id).value));
   config.messageTemplate=$("#messageTemplate").value;
   return config;

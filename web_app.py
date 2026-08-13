@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.request
 import base64
+import re
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -86,6 +87,7 @@ def public_config():
         "browserTimeout": int(env.get("BROWSER_TIMEOUT", "120000")),
         "friendListWaitTime": int(env.get("FRIEND_LIST_WAIT_TIME", "2000")),
         "taskRetryTimes": int(env.get("TASK_RETRY_TIMES", "3")),
+        "scheduleTime": env.get("SCHEDULE_TIME", "04:00"),
         "logLevel": env.get("LOG_LEVEL", "Info"),
         "accounts": accounts,
         "github": {"repository": GITHUB_REPOSITORY, "environment": GITHUB_ENVIRONMENT},
@@ -131,6 +133,7 @@ def save_config(payload):
         "BROWSER_TIMEOUT": str(max(10000, int(payload.get("browserTimeout", 120000)))),
         "FRIEND_LIST_WAIT_TIME": str(max(500, int(payload.get("friendListWaitTime", 2000)))),
         "TASK_RETRY_TIMES": str(max(1, int(payload.get("taskRetryTimes", 3)))),
+        "SCHEDULE_TIME": validate_schedule_time(payload.get("scheduleTime", current.get("SCHEDULE_TIME", "04:00"))),
         "LOG_LEVEL": payload.get("logLevel", "Info"),
     }
 
@@ -151,6 +154,18 @@ def save_config(payload):
     updates["TASKS"] = json.dumps(tasks, ensure_ascii=False, separators=(",", ":"))
     write_env(updates)
     return public_config()
+
+
+def validate_schedule_time(value):
+    value = str(value or "").strip()
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+        raise ValueError("执行时间必须是 HH:MM 格式")
+    return value
+
+
+def schedule_cron(value):
+    hour, minute = map(int, validate_schedule_time(value).split(":"))
+    return f"{minute} {(hour - 8) % 24} * * *"
 
 
 def github_token():
