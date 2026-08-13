@@ -143,13 +143,13 @@ async function scanPinned(){
   try{
     toast("正在打开创作者中心并扫描置顶会话...");
     const result=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:Number(index)-1})});
-    state.scan=result.result;renderScanResults();toast("扫描完成，请确认后加入配置");
+    state.scan=result.result;renderScanResults();toast(result.result.message||"扫描完成，请确认后加入配置");
   }catch(error){toast(error.message,true);}
 }
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
-  $("#scanResults").innerHTML=(state.scan.contacts||[]).map((item,i)=>'<label class="scan-row"><input type="checkbox" data-scan-index="'+i+'" checked><span><strong>'+escapeHtml(item.uniqueId||item.shortId||"未获取抖音号")+'</strong><small>'+escapeHtml(item.nickname)+(item.remark&&item.remark!==item.nickname?' · '+escapeHtml(item.remark):'')+'</small></span></label>').join("")||'<div class="empty">没有读取到置顶会话</div>';
+  $("#scanResults").innerHTML=(state.scan.contacts||[]).map((item,i)=>'<label class="scan-row"><input type="checkbox" data-scan-index="'+i+'" checked><span><strong>'+escapeHtml(item.uniqueId||item.shortId||"未获取抖音号")+'</strong><small>'+escapeHtml(item.nickname)+(item.remark&&item.remark!==item.nickname?' · '+escapeHtml(item.remark):'')+'</small></span></label>').join("")||'<div class="empty">未识别到置顶会话。普通消息联系人不会加入扫描结果。</div>';
 }
 function clearScanResults(){
   state.scan=null;

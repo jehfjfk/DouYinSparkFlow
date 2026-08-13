@@ -274,11 +274,23 @@ def scan_pinned_account(account_index):
         task_core.open_chat_page(page)
         page.wait_for_timeout(max(1000, config["friendListWaitTime"]))
         items = page.locator(task_core.CONVERSATION_LIST_SELECTOR).locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
+        def is_pinned_item(item):
+            """Douyin renders the pin marker in different nested nodes across releases."""
+            marker = item.evaluate("""element => {
+                const values = [];
+                for (const node of [element, ...element.querySelectorAll('*')]) {
+                    values.push(node.className || '', node.id || '', node.getAttribute('aria-label') || '',
+                        node.getAttribute('title') || '', node.getAttribute('data-e2e') || '',
+                        node.getAttribute('data-testid') || '');
+                }
+                return values.join(' ').toLowerCase();
+            }""")
+            return "置顶" in marker or "pinned" in marker or "pin" in marker
+
         for item in items:
             try:
                 title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
-                marker = (item.get_attribute("class") or "") + " " + (item.get_attribute("aria-label") or "")
-                if not title or ("pinned" not in marker.lower() and "置顶" not in marker and "置顶" not in item.inner_text()[:80]):
+                if not title or not is_pinned_item(item):
                     continue
                 item.click()
                 page.wait_for_timeout(250)
@@ -286,10 +298,7 @@ def scan_pinned_account(account_index):
                 results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
             except Exception:
                 continue
-        if not results:
-            for title, identity in task_core.userIDDict.items():
-                results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": False})
-        return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True}
+        return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
     finally:
         context.close()
         browser.close()
