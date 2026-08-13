@@ -124,7 +124,7 @@ function collectConfig(){
 async function saveConfig(){
   try{
     const result=await api("/api/config",{method:"POST",body:JSON.stringify(collectConfig())});
-    state.config=result.config;renderAll();toast("配置已保存");
+    state.config=result.config;clearScanResults();renderAll();toast("配置已保存");
   }catch(error){toast(error.message,true);throw error;}
 }
 async function syncGithub(){
@@ -148,15 +148,21 @@ async function scanPinned(){
 }
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
+  $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
   $("#scanResults").innerHTML=(state.scan.contacts||[]).map((item,i)=>'<label class="scan-row"><input type="checkbox" data-scan-index="'+i+'" checked><span><strong>'+escapeHtml(item.uniqueId||item.shortId||"未获取抖音号")+'</strong><small>'+escapeHtml(item.nickname)+(item.remark&&item.remark!==item.nickname?' · '+escapeHtml(item.remark):'')+'</small></span></label>').join("")||'<div class="empty">没有读取到置顶会话</div>';
+}
+function clearScanResults(){
+  state.scan=null;
+  $("#scanPanel").classList.add("hidden");
+  $("#scanResults").innerHTML="";
 }
 function importScanned(){
   if(!state.scan)return;
-  const index=Number(prompt("加入哪个账号？请输入序号：", "1"))-1;
+  const index=state.scan.accountIndex;
   if(index<0||!state.config.accounts[index])return;
   const selected=$$("[data-scan-index]:checked").map(input=>state.scan.contacts[Number(input.dataset.scanIndex)]).filter(item=>item.uniqueId||item.shortId);
   selected.forEach(item=>{const id=item.uniqueId||item.shortId;const aliases=[item.nickname,item.remark].filter(Boolean);if(!state.config.accounts[index].targets.some(target=>target.id===id))state.config.accounts[index].targets.push({id,aliases});});
-  renderAccounts();toast("已加入 "+selected.length+" 个好友，请保存配置");
+  renderAccounts();clearScanResults();toast("已加入账号 "+(index+1)+" 的 "+selected.length+" 个好友，请保存配置");
 }
 async function requestRun(){try{await saveConfig();$("#confirmModal").classList.remove("hidden");}catch(_error){}}
 async function startRun(){
@@ -199,7 +205,7 @@ function bindStaticEvents(){
   $("#cancelRun").addEventListener("click",()=>$("#confirmModal").classList.add("hidden"));
   $("#confirmRun").addEventListener("click",startRun);
   $("#refreshLogs").addEventListener("click",loadLogs);
-  $("#addAccount").addEventListener("click",()=>{state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
+  $("#addAccount").addEventListener("click",()=>{clearScanResults();state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
 }
 async function init(){
   bindStaticEvents();
