@@ -278,14 +278,21 @@ def scan_pinned_account(account_index):
             """Douyin renders the pin marker in different nested nodes across releases."""
             marker = item.evaluate("""element => {
                 const values = [];
-                for (const node of [element, ...element.querySelectorAll('*')]) {
+                const nodes = [element, ...element.querySelectorAll('*')];
+                let parent = element.parentElement;
+                for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) nodes.push(parent);
+                for (const node of nodes) {
                     values.push(node.className || '', node.id || '', node.getAttribute('aria-label') || '',
                         node.getAttribute('title') || '', node.getAttribute('data-e2e') || '',
-                        node.getAttribute('data-testid') || '');
+                        node.getAttribute('data-testid') || '', node.getAttribute('data-test') || '',
+                        node.getAttribute('data-type') || '', node.getAttribute('data-status') || '');
                 }
+                let sibling = element.previousElementSibling;
+                for (let i = 0; sibling && i < 3; i++, sibling = sibling.previousElementSibling) values.push(sibling.textContent || '', sibling.className || '');
                 return values.join(' ').toLowerCase();
             }""")
-            return "置顶" in marker or "pinned" in marker or "pin" in marker
+            return ("置顶" in marker or "pinned" in marker or "pin" in marker or
+                    "stick" in marker or "top-contact" in marker)
 
         for item in items:
             try:
