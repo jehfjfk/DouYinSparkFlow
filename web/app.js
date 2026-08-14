@@ -22,7 +22,23 @@ function showLogin(message=""){$("#appShell").classList.add("hidden");$("#loginS
 function showApp(){$("#loginScreen").classList.add("hidden");$("#appShell").classList.remove("hidden");document.body.classList.toggle("restricted-user",state.session.role!=="master");$("#manageUsers").classList.toggle("hidden",!state.session.canRegister);$("#logoutButton").classList.toggle("hidden",Boolean(state.session.localAutoLogin));}
 async function login(event){event.preventDefault();$("#loginError").textContent="";try{await api("/api/auth/login",{method:"POST",body:JSON.stringify({username:$("#loginUsername").value,password:$("#loginPassword").value})});await initAuthenticated();}catch(error){showLogin(error.message);}}
 async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}"});}finally{location.reload();}}
-async function manageUsers(){const accountId=prompt("绑定的抖音号\n"+state.config.accounts.map(account=>account.uniqueId+"  "+account.username).join("\n"));if(!accountId)return;if(!state.config.accounts.some(account=>account.uniqueId===accountId)){toast("抖音号不存在",true);return;}const username=prompt("网站登录账号");if(!username)return;const password=prompt("网站登录密码（至少 8 位）");if(!password)return;try{await api("/api/users",{method:"POST",body:JSON.stringify({username,password,accountIds:[accountId]})});toast("网站用户已保存");}catch(error){toast(error.message,true);}}
+async function manageUsers(){
+  try{
+    const data=await api("/api/users");
+    $("#userAccountSelect").innerHTML=state.config.accounts.map(account=>'<option value="'+escapeHtml(account.uniqueId)+'">'+escapeHtml(account.username)+" · "+escapeHtml(account.uniqueId)+"</option>").join("");
+    $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
+    $("#websiteUsername").value="";$("#websitePassword").value="";$("#userFormError").textContent="";
+    $("#userModal").classList.remove("hidden");
+  }catch(error){toast(error.message,true);}
+}
+function closeUserManager(){$("#userModal").classList.add("hidden");}
+async function saveWebsiteUser(event){
+  event.preventDefault();$("#userFormError").textContent="";
+  try{
+    await api("/api/users",{method:"POST",body:JSON.stringify({username:$("#websiteUsername").value.trim(),password:$("#websitePassword").value,accountIds:[$("#userAccountSelect").value]})});
+    closeUserManager();toast("手机端登录账号已保存");
+  }catch(error){$("#userFormError").textContent=error.message;}
+}
 function escapeHtml(value){
   return String(value).replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 }
@@ -265,6 +281,9 @@ function bindStaticEvents(){
   });
   $("#logoutButton").addEventListener("click",logout);
   $("#manageUsers").addEventListener("click",manageUsers);
+  $("#userForm").addEventListener("submit",saveWebsiteUser);
+  $("#closeUserModal").addEventListener("click",closeUserManager);
+  $("#cancelUserModal").addEventListener("click",closeUserManager);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
