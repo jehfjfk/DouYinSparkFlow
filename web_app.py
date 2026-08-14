@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 import base64
 import re
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -357,6 +358,56 @@ def get_scan_status():
         return dict(SCAN_STATUS)
 
 
+def refresh_account_login(account_id):
+    """Open an interactive Douyin login and persist the resulting Cookie for one account."""
+    from core.browser import get_browser
+    from core import tasks as task_core
+
+    account_id = str(account_id or "").strip()
+    account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
+    if not account:
+        raise ValueError("指定账号不存在")
+    update_scan_status(True, 5, "正在打开登录窗口")
+    playwright, browser = get_browser()
+    context = browser.new_context(user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN", timezone_id="Asia/Shanghai")
+    page = context.new_page()
+    try:
+        page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
+        update_scan_status(True, 20, "请在弹出的窗口完成抖音登录")
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            names = {cookie.get("name") for cookie in context.cookies()}
+            if names.intersection({"sessionid", "sessionid_ss", "sid_guard"}):
+                page.goto(task_core.CHAT_URL, wait_until="domcontentloaded")
+                try:
+                    task_core.wait_for_chat_ready(page, timeout=10000)
+                    break
+                except (task_core.AuthenticationRequiredError, TimeoutError):
+                    page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+        else:
+            raise ValueError("等待登录超时，请重新点击后在 5 分钟内完成登录")
+
+        update_scan_status(True, 75, "登录成功，正在保存 Cookie")
+        cookies = context.cookies()
+        value = json.dumps(cookies, ensure_ascii=False, separators=(",", ":"))
+        write_env({f"COOKIES_{account_id.upper()}": value})
+        token = github_token()
+        owner, repo = GITHUB_REPOSITORY.split("/", 1)
+        base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
+        key_info = github_request("GET", f"{base}/secrets/public-key", token)
+        github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
+            "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
+        })
+        update_scan_status(False, 100, "Cookie 已更新到本机和 GitHub")
+        return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
+    except Exception as exc:
+        update_scan_status(False, 100, "登录更新失败", str(exc))
+        raise
+    finally:
+        context.close(); browser.close(); playwright.stop()
+
+
 class TaskRunner:
     def __init__(self):
         self.lock = threading.Lock()
@@ -501,6 +552,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/scan-pinned":
                 payload = self.read_json()
                 return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
+            if self.path == "/api/account-login-refresh":
+                payload = self.read_json()
+                return self.json_response({"ok": True, "result": refresh_account_login(payload.get("accountId"))})
             if self.path == "/api/run":
                 return self.json_response({"ok": True, "status": RUNNER.start()})
             if self.path == "/api/run-account":

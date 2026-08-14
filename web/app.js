@@ -33,7 +33,7 @@ function accountMarkup(account,index){
   const targets=account.targets.map((target,i)=>'<span class="editable-chip"><strong>'+escapeHtml(target.id)+'</strong>'+(target.aliases.length?' · '+escapeHtml(target.aliases.join(" / ")):'')+'<button data-action="remove-target" data-target-index="'+i+'" title="移除">×</button></span>').join("");
   return '<article class="account-card" data-index="'+index+'">'+
     '<div class="account-head"><span class="account-index">账号 '+String(index+1).padStart(2,"0")+'</span><div><span class="account-status">'+
-    (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span><button class="text-button" data-action="run-account" title="仅运行此账号">运行此账号</button><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
+    (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span><button class="text-button" data-action="login-refresh" title="网页登录并自动更新 Cookie">更新登录</button><button class="text-button" data-action="run-account" title="仅运行此账号">运行此账号</button><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
@@ -63,6 +63,7 @@ function bindAccountEvents(){
       if(confirm("删除此账号及好友配置？同步后对应 Cookie Secret 也会删除。")){state.config.accounts.splice(index,1);renderAccounts();}
     });
     card.querySelector('[data-action="run-account"]').addEventListener("click",()=>runSingleAccount(index));
+    card.querySelector('[data-action="login-refresh"]').addEventListener("click",()=>refreshAccountLogin(index));
     card.querySelectorAll('[data-action="remove-target"]').forEach(button=>button.addEventListener("click",()=>{
       state.config.accounts[index].targets.splice(Number(button.dataset.targetIndex),1);renderAccounts();
     }));
@@ -189,6 +190,17 @@ async function runSingleAccount(index){
     const result=await api("/api/run-account",{method:"POST",body:JSON.stringify({accountId:account.uniqueId})});
     state.status=result.status;renderStatus();toast("已启动账号 "+account.username);
   }catch(error){toast(error.message,true);}
+}
+async function refreshAccountLogin(index){
+  const account=state.config.accounts[index];
+  if(!account||!account.uniqueId){toast("请先填写并保存账号抖音号",true);return;}
+  let timer=null;
+  try{
+    $("#scanProgress").classList.remove("hidden");setScanProgress(0,"准备打开登录窗口");
+    timer=setInterval(loadScanProgress,500);
+    const result=await api("/api/account-login-refresh",{method:"POST",body:JSON.stringify({accountId:account.uniqueId})});
+    account.cookieConfigured=true;account.cookieCount=result.result.cookieCount;renderAccounts();toast("登录状态已更新到本机和 GitHub");
+  }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
 }
 async function stopRun(){
   try{const result=await api("/api/stop",{method:"POST",body:"{}"});state.status=result.status;renderStatus();toast("任务已停止");}
