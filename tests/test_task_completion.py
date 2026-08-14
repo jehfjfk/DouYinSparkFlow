@@ -1,10 +1,20 @@
 import unittest
+import os
+from unittest.mock import patch
 
 from core.tasks import TargetNotFoundError, checkTargetName, ensure_all_targets_found
 from utils.config import normalize_targets
+import utils.config as config_module
 
 
 class TaskCompletionTests(unittest.TestCase):
+    def test_manual_account_filter_keeps_only_requested_account(self):
+        tasks = '[{"username":"old","unique_id":"old","targets":[]},{"username":"new","unique_id":"new","targets":[]}]'
+        with patch.dict(os.environ, {"TASKS": tasks, "RUN_ACCOUNT_ID": "old", "COOKIES_OLD": "[]"}, clear=False):
+            config_module.userData = None
+            users = config_module.get_userData()
+            self.assertEqual([user["unique_id"] for user in users], ["old"])
+        config_module.userData = None
     def test_all_targets_found_succeeds(self):
         ensure_all_targets_found("account", set())
 

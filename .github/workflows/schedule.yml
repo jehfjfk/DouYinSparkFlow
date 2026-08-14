@@ -3,7 +3,13 @@ concurrency:
   group: douyin-spark-flow
   cancel-in-progress: false
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      account_id:
+        description: "仅运行指定抖音号；留空运行全部账号"
+        required: false
+        type: string
+        default: ""
   schedule: # 定时任务
     - cron: "0 20 * * *" # 每天 20:00 UTC（对应北京时间次日 4:00）
 jobs:
@@ -32,6 +38,8 @@ jobs:
         SECRETS_JSON: ${{ toJson(secrets) }}
       run: python utils/export_github_env.py
     - name: Run DouYin Spark Flow
+      env:
+        RUN_ACCOUNT_ID: ${{ inputs.account_id || '' }}
       run: python main.py
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}

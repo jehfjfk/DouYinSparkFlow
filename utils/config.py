@@ -111,6 +111,12 @@ def get_userData():
         return userData
 
     tasks = json.loads(os.getenv("TASKS", "[]"))
+    run_account_id = norm(os.getenv("RUN_ACCOUNT_ID", ""))
+    if run_account_id:
+        tasks = [task for task in tasks if norm(task.get("unique_id")) == run_account_id]
+        if not tasks:
+            raise ValueError(f"未找到指定运行账号: {run_account_id}")
+        logger.info(f"本次仅运行指定账号: {run_account_id}")
 
     userData = []
 
