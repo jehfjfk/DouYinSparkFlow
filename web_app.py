@@ -304,23 +304,22 @@ def scan_pinned_account(account_index, finalize=True):
         conversation_list = page.locator(task_core.CONVERSATION_LIST_SELECTOR)
         def is_pinned_item(item):
             """Douyin renders the pin marker in different nested nodes across releases."""
-            marker = item.evaluate("""element => {
+            markers = item.evaluate("""element => {
                 const values = [];
                 const nodes = [element, ...element.querySelectorAll('*')];
-                let parent = element.parentElement;
-                for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) nodes.push(parent);
                 for (const node of nodes) {
                     values.push(node.className || '', node.id || '', node.getAttribute('aria-label') || '',
                         node.getAttribute('title') || '', node.getAttribute('data-e2e') || '',
                         node.getAttribute('data-testid') || '', node.getAttribute('data-test') || '',
                         node.getAttribute('data-type') || '', node.getAttribute('data-status') || '');
                 }
-                let sibling = element.previousElementSibling;
-                for (let i = 0; sibling && i < 3; i++, sibling = sibling.previousElementSibling) values.push(sibling.textContent || '', sibling.className || '');
-                return values.join(' ').toLowerCase();
+                return values.filter(Boolean).map(value => String(value).toLowerCase());
             }""")
-            return ("置顶" in marker or "pinned" in marker or "pin" in marker or
-                    "stick" in marker or "top-contact" in marker)
+            return any(
+                "置顶" in marker or "isstickontop" in marker or "stick-on-top" in marker or
+                "stick_on_top" in marker or ("ispinned" in marker and "unpinned" not in marker)
+                for marker in markers
+            )
 
         conversation_list.evaluate("""element => {
             const nodes = [element, ...element.querySelectorAll('*')];
@@ -415,6 +414,11 @@ def update_scan_status(running, percent, stage, error=None, **extra):
 def get_scan_status():
     with SCAN_LOCK:
         return dict(SCAN_STATUS)
+
+
+def clear_scan_result():
+    with SCAN_LOCK:
+        SCAN_STATUS["scanResult"] = None
 
 
 def refresh_account_login(account_id, continue_to_scan=False):
@@ -753,6 +757,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/scan-pinned":
                 payload = self.read_json()
                 return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
+            if self.path == "/api/scan-result/clear":
+                clear_scan_result()
+                return self.json_response({"ok": True})
             if self.path == "/api/account-login-refresh":
                 payload = self.read_json()
                 return self.json_response({"ok": True, "result": refresh_login_and_scan(payload.get("accountId"))})

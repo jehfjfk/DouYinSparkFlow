@@ -149,7 +149,7 @@ async function scanPinned(){
     progressTimer=setInterval(loadScanProgress,400);
     toast("正在打开创作者中心并扫描置顶会话...");
     const result=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:Number(index)-1})});
-    state.scan=result.result;renderScanResults();toast(result.result.message||"扫描完成，请确认后加入配置");
+    state.scan=pendingScanResult(result.result);if(state.scan.contacts.length){renderScanResults();toast(result.result.message||"扫描完成，请确认后加入配置");}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("置顶会话均已配置");}
   }catch(error){toast(error.message,true);}finally{if(progressTimer)clearInterval(progressTimer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1400);}
 }
 function setScanProgress(percent,stage){
@@ -157,7 +157,8 @@ function setScanProgress(percent,stage){
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
 }
-async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const key=JSON.stringify([status.scanResult.accountIndex,(status.scanResult.contacts||[]).map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=status.scanResult;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const pending=pendingScanResult(status.scanResult);if(!pending.contacts.length){clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});return;}const key=JSON.stringify([pending.accountIndex,pending.contacts.map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=pending;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
+function pendingScanResult(result){const account=state.config.accounts[result.accountIndex];if(!account)return result;const configured=new Set((account.targets||[]).flatMap(target=>[target.id,...(target.aliases||[])]).filter(Boolean));return Object.assign({},result,{contacts:(result.contacts||[]).filter(item=>!configured.has(item.uniqueId||item.shortId||item.nickname||item.remark)&&![item.nickname,item.remark].filter(Boolean).some(value=>configured.has(value)))});}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。好友使用抖音号，群聊使用群名称。";
@@ -165,6 +166,7 @@ function renderScanResults(){
 }
 function clearScanResults(){
   state.scan=null;
+  state.scanResultKey=null;
   $("#scanPanel").classList.add("hidden");
   $("#scanResults").innerHTML="";
 }
@@ -174,7 +176,7 @@ function importScanned(){
   if(index<0||!state.config.accounts[index])return;
   const selected=$$("[data-scan-index]:checked").map(input=>state.scan.contacts[Number(input.dataset.scanIndex)]).filter(item=>item.uniqueId||item.shortId||item.nickname||item.remark);
   selected.forEach(item=>{const id=item.uniqueId||item.shortId||item.nickname||item.remark;const aliases=[item.nickname,item.remark].filter(Boolean);if(!state.config.accounts[index].targets.some(target=>target.id===id))state.config.accounts[index].targets.push({id,aliases});});
-  renderAccounts();clearScanResults();toast("已加入账号 "+(index+1)+" 的 "+selected.length+" 个好友，请保存配置");
+  renderAccounts();clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("已加入账号 "+(index+1)+" 的 "+selected.length+" 个好友，请保存配置");
 }
 async function requestRun(){try{await saveConfig();$("#confirmModal").classList.remove("hidden");}catch(_error){}}
 async function startRun(){
@@ -207,7 +209,7 @@ async function refreshAccountLogin(index){
     const scanResult=result?.result?.scan||loginStatus.scanResult;
     if(!scanResult){throw requestError||new Error("登录后的置顶好友扫描未完成");}
     account.cookieConfigured=true;if(result)account.cookieCount=result.result.login.cookieCount;renderAccounts();
-    state.scan=scanResult;renderScanResults();toast(scanResult.message||"登录已更新，置顶好友扫描完成");
+    state.scan=pendingScanResult(scanResult);if(state.scan.contacts.length){renderScanResults();toast(scanResult.message||"登录已更新，置顶好友扫描完成");}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("登录已更新，置顶会话均已配置");}
   }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
 }
 async function stopRun(){

@@ -29,3 +29,20 @@ def test_scan_starts_at_top_and_deduplicates_rows_and_results():
     assert "data-conversation-id" in source
     assert "result_keys = set()" in source
     assert "result_key = unique_id or short_id or title" in source
+
+
+def test_pin_detection_does_not_use_broad_parent_or_pin_substrings():
+    source = Path("web_app.py").read_text(encoding="utf-8")
+    pin_block = source.split("def is_pinned_item", 1)[1].split("conversation_list.evaluate", 1)[0]
+    assert "parentElement" not in pin_block
+    assert '"pin" in marker' not in pin_block
+    assert '"stick" in marker' not in pin_block
+    assert '"isstickontop" in marker' in pin_block
+
+
+def test_configured_scan_results_are_filtered_and_cleared():
+    frontend = Path("web/app.js").read_text(encoding="utf-8")
+    backend = Path("web_app.py").read_text(encoding="utf-8")
+    assert "function pendingScanResult" in frontend
+    assert 'api("/api/scan-result/clear"' in frontend
+    assert 'self.path == "/api/scan-result/clear"' in backend
