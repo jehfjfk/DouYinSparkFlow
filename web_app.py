@@ -301,7 +301,7 @@ def scan_pinned_account(account_index, finalize=True):
         task_core.open_chat_page(page)
         page.wait_for_timeout(max(1000, config["friendListWaitTime"]))
         update_scan_status(True, 55, "正在读取会话列表")
-        items = page.locator(task_core.CONVERSATION_LIST_SELECTOR).locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
+        conversation_list = page.locator(task_core.CONVERSATION_LIST_SELECTOR)
         def is_pinned_item(item):
             """Douyin renders the pin marker in different nested nodes across releases."""
             marker = item.evaluate("""element => {
@@ -322,33 +322,52 @@ def scan_pinned_account(account_index, finalize=True):
             return ("置顶" in marker or "pinned" in marker or "pin" in marker or
                     "stick" in marker or "top-contact" in marker)
 
-        total = max(1, len(items))
-        for item_index, item in enumerate(items):
-            update_scan_status(True, 55 + int((item_index + 1) / total * 35), f"正在识别置顶会话 {item_index + 1}/{len(items)}")
-            try:
-                title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
-                if not title:
-                    # The title node is initially empty while Vue hydrates; the rendered row text is available.
-                    row_lines = [task_core.norm(line) for line in item.inner_text().splitlines() if task_core.norm(line)]
-                    title = row_lines[0] if row_lines else ""
-                if not title or not is_pinned_item(item):
+        seen_titles = set()
+        stable_rounds = 0
+        for scan_round in range(60):
+            items = conversation_list.locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
+            new_rows = 0
+            update_scan_status(True, min(92, 55 + scan_round * 2), f"正在遍历会话列表，已读取 {len(seen_titles)} 个会话")
+            for item in items:
+                try:
+                    title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
+                    if not title:
+                        row_lines = [task_core.norm(line) for line in item.inner_text().splitlines() if task_core.norm(line)]
+                        title = row_lines[0] if row_lines else ""
+                    if not title or title in seen_titles:
+                        continue
+                    seen_titles.add(title)
+                    new_rows += 1
+                    if not is_pinned_item(item):
+                        continue
+                    item.click()
+                    identity = []
+                    identity_deadline = time.monotonic() + 2
+                    while time.monotonic() < identity_deadline:
+                        identity = task_core.userIDDict.get(title, [])
+                        if not identity:
+                            identity = next(
+                                (values for name, values in task_core.userIDDict.items() if task_core.norm(name) == task_core.norm(title)),
+                                [],
+                            )
+                        if identity:
+                            break
+                        page.wait_for_timeout(200)
+                    results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
+                except Exception:
                     continue
-                item.click()
-                identity = []
-                identity_deadline = time.monotonic() + 2
-                while time.monotonic() < identity_deadline:
-                    identity = task_core.userIDDict.get(title, [])
-                    if not identity:
-                        identity = next(
-                            (values for name, values in task_core.userIDDict.items() if task_core.norm(name) == task_core.norm(title)),
-                            [],
-                        )
-                    if identity:
-                        break
-                    page.wait_for_timeout(200)
-                results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
-            except Exception:
-                continue
+
+            scroll_state = conversation_list.evaluate("""element => {
+                const nodes = [element, ...element.querySelectorAll('*')];
+                const scroller = nodes.find(node => node.scrollHeight > node.clientHeight + 4) || element;
+                const before = scroller.scrollTop;
+                scroller.scrollTop = Math.min(scroller.scrollHeight, before + Math.max(200, scroller.clientHeight * 0.8));
+                return {before, after: scroller.scrollTop, bottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4};
+            }""")
+            page.wait_for_timeout(500)
+            stable_rounds = stable_rounds + 1 if new_rows == 0 and (scroll_state["bottom"] or scroll_state["after"] == scroll_state["before"]) else 0
+            if stable_rounds >= 3:
+                break
         update_scan_status(not finalize, 100 if finalize else 98, f"扫描完成，识别到 {len(results)} 个置顶会话")
         return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
     except Exception as exc:

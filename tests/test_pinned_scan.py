@@ -12,3 +12,11 @@ def test_scan_waits_for_identity_and_frontend_keeps_name_only_contacts():
     frontend = Path("web/app.js").read_text(encoding="utf-8")
     assert "identity_deadline = time.monotonic() + 2" in backend
     assert "item.uniqueId||item.shortId||item.nickname||item.remark" in frontend
+
+
+def test_scan_traverses_virtualized_conversation_list_until_stable_bottom():
+    source = Path("web_app.py").read_text(encoding="utf-8")
+    assert "for scan_round in range(60)" in source
+    assert "scroller.clientHeight * 0.8" in source
+    assert "stable_rounds >= 3" in source
+    assert "seen_titles" in source
