@@ -432,11 +432,12 @@ def refresh_account_login(account_id):
         update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
         deadline = time.monotonic() + 300
         auth_cookie_names = {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt", "uid_tt_ss"}
+        qr_locked = False
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
             try:
                 current_qr_image = qr_locator.get_attribute("src")
-                if current_qr_image and current_qr_image != qr_image:
+                if not qr_locked and current_qr_image and current_qr_image != qr_image:
                     qr_image = current_qr_image
                     if qr_image.startswith("blob:"):
                         qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
@@ -446,8 +447,10 @@ def refresh_account_login(account_id):
                     label in login_text for label in ("接收短信验证码", "手机刷脸验证", "验证登录密码")
                 )
                 if identity_verification:
+                    qr_locked = True
                     update_scan_status(True, 35, "已扫码：请在电脑身份验证弹窗中选择短信、刷脸或密码", qrImage=None)
                 elif "扫码成功" in login_text or "确认登录" in login_text:
+                    qr_locked = True
                     update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
             except Exception:
                 pass
@@ -482,7 +485,7 @@ def refresh_account_login(account_id):
         update_scan_status(False, 100, "登录已更新，准备扫描置顶好友", loginUrl=None, qrImage=None)
         return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
     except Exception as exc:
-        update_scan_status(False, 100, "登录更新失败", str(exc))
+        update_scan_status(False, get_scan_status()["percent"], "登录更新失败", str(exc), loginUrl=None, qrImage=None)
         raise
     finally:
         context.close(); browser.close(); playwright.stop()
