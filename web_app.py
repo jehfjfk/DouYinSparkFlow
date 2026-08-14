@@ -431,15 +431,22 @@ def refresh_account_login(account_id):
                 login_url = None
         update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
         deadline = time.monotonic() + 300
+        auth_cookie_names = {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt", "uid_tt_ss"}
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
-            if names.intersection({"sessionid", "sessionid_ss", "sid_guard"}):
+            try:
+                qr_completed = not qr_locator.is_visible()
+            except Exception:
+                qr_completed = True
+            if names.intersection(auth_cookie_names) or qr_completed:
+                update_scan_status(True, 45, "已确认扫码，正在验证抖音主站登录", loginUrl=None, qrImage=None)
                 page.goto(task_core.CHAT_URL, wait_until="domcontentloaded")
                 try:
                     task_core.wait_for_chat_ready(page, timeout=10000)
                     break
                 except (task_core.AuthenticationRequiredError, TimeoutError):
                     page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
+                    update_scan_status(True, 20, "创作者中心已登录，正在等待主站同步", loginUrl=None, qrImage=None)
             page.wait_for_timeout(2000)
         else:
             raise ValueError("等待登录超时，请重新点击后在 5 分钟内完成登录")
