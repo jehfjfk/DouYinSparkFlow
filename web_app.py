@@ -47,15 +47,18 @@ def read_env():
     return values
 
 
-def write_env(updates):
+def write_env(updates, delete_keys=None):
     with ENV_LOCK:
         lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
         pending = dict(updates)
+        deleted = set(delete_keys or [])
         output = []
         for line in lines:
             stripped = line.lstrip()
             if stripped and not stripped.startswith("#") and "=" in stripped:
                 key = stripped.split("=", 1)[0].strip()
+                if key in deleted:
+                    continue
                 if key in pending:
                     output.append(f"{key}={pending.pop(key)}")
                     continue
@@ -181,10 +184,11 @@ def validate_cookie_json(raw):
 
 def save_config(payload):
     accounts = payload.get("accounts", [])
-    if not isinstance(accounts, list) or not accounts:
-        raise ValueError("至少需要一个账号")
+    if not isinstance(accounts, list):
+        raise ValueError("账号配置格式错误")
 
     current = read_env()
+    previous_tasks = parse_json(current.get("TASKS", "[]"), [])
     tasks = []
     updates = {
         "PROXY_ADDRESS": str(payload.get("proxyAddress", current.get("PROXY_ADDRESS", ""))),
@@ -211,7 +215,13 @@ def save_config(payload):
             updates[f"COOKIES_{unique_id.upper()}"] = json.dumps(cookies, ensure_ascii=False, separators=(",", ":"))
 
     updates["TASKS"] = json.dumps(tasks, ensure_ascii=False, separators=(",", ":"))
-    write_env(updates)
+    active_ids = {task["unique_id"].upper() for task in tasks}
+    removed_cookie_keys = {
+        f"COOKIES_{str(task.get('unique_id', '')).upper()}"
+        for task in previous_tasks
+        if str(task.get("unique_id", "")).upper() not in active_ids
+    }
+    write_env(updates, removed_cookie_keys)
     return public_config()
 
 
@@ -306,8 +316,6 @@ def encrypted_secret(value, public_key):
 
 def sync_github(allowed_account_ids=None):
     config = public_config()
-    if not config["accounts"]:
-        raise ValueError("请先保存至少一个账号")
     env = read_env()
     token = github_token()
     owner, repo = GITHUB_REPOSITORY.split("/", 1)
@@ -316,7 +324,13 @@ def sync_github(allowed_account_ids=None):
     remote_values = {item["name"]: item["value"] for item in variables}
     local_tasks = parse_json(env.get("TASKS", "[]"), [])
     remote_tasks = parse_json(remote_values.get("TASKS", "[]"), [])
-    env["TASKS"] = json.dumps(merge_tasks(remote_tasks, local_tasks), ensure_ascii=False, separators=(",", ":"))
+    allowed = set(allowed_account_ids) if allowed_account_ids is not None else None
+    if allowed is None:
+        synced_tasks = local_tasks
+    else:
+        scoped_tasks = [task for task in local_tasks if str(task.get("unique_id", "")) in allowed]
+        synced_tasks = merge_tasks(remote_tasks, scoped_tasks)
+    env["TASKS"] = json.dumps(synced_tasks, ensure_ascii=False, separators=(",", ":"))
     variable_names = ["TASKS"] if allowed_account_ids is not None else ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
     for name in variable_names:
         value = env.get(name, "")
@@ -331,9 +345,8 @@ def sync_github(allowed_account_ids=None):
                 raise
             github_request("POST", f"{base}/variables", token, {"name": name, "value": value})
 
-    key_info = github_request("GET", f"{base}/secrets/public-key", token)
     active_secrets = set()
-    allowed = set(allowed_account_ids) if allowed_account_ids is not None else None
+    key_info = github_request("GET", f"{base}/secrets/public-key", token) if config["accounts"] else None
     for account in config["accounts"]:
         if allowed is not None and account["uniqueId"] not in allowed:
             continue
@@ -344,7 +357,24 @@ def sync_github(allowed_account_ids=None):
         github_request("PUT", f"{base}/secrets/{name}", token, {"encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"]})
         active_secrets.add(name)
 
-    return {"repository": GITHUB_REPOSITORY, "accounts": len(parse_json(env["TASKS"], [])), "secrets": len(active_secrets)}
+    deleted_secrets = []
+    if allowed is None:
+        active_ids = {str(task.get("unique_id", "")).upper() for task in local_tasks}
+        removed_ids = {
+            str(task.get("unique_id", "")).upper()
+            for task in remote_tasks
+            if str(task.get("unique_id", "")).upper() not in active_ids
+        }
+        for account_id in sorted(removed_ids):
+            name = f"COOKIES_{account_id}"
+            try:
+                github_request("DELETE", f"{base}/secrets/{name}", token)
+            except ValueError as exc:
+                if "HTTP 404" not in str(exc):
+                    raise
+            deleted_secrets.append(name)
+
+    return {"repository": GITHUB_REPOSITORY, "accounts": len(synced_tasks), "secrets": len(active_secrets), "deletedSecrets": deleted_secrets}
 
 
 def scan_pinned_account(account_index, finalize=True):

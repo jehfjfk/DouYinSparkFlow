@@ -140,7 +140,8 @@ async function syncGithub(){
     button.disabled=true;button.textContent="正在同步...";
     await saveConfig();
     const result=await api("/api/github/sync",{method:"POST",body:"{}"});
-    toast("已同步 "+result.result.accounts+" 个账号到 GitHub");
+    const deleted=result.result.deletedSecrets.length;
+    toast("已同步 "+result.result.accounts+" 个账号到 GitHub"+(deleted?"，删除 "+deleted+" 个旧账号凭证":""));
   }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="同步到 GitHub";}
 }
 async function scanPinned(){

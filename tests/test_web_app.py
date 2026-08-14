@@ -107,9 +107,77 @@ def test_merge_tasks_preserves_other_github_accounts():
     assert merged[1]["targets"] == ["after"]
 
 
-def test_sync_never_deletes_cookie_secrets():
-    source = Path(web_app.__file__).read_text(encoding="utf-8")
-    assert 'github_request("DELETE", f"{base}/secrets/' not in source
+def test_save_deleted_account_removes_local_cookie(isolated_env):
+    isolated_env.write_text(
+        'TASKS=[{"username":"保留","unique_id":"keep","targets":[]},{"username":"删除","unique_id":"gone","targets":[]}]\n'
+        + "COOKIES_KEEP=" + cookie_json() + "\nCOOKIES_GONE=" + cookie_json() + "\n",
+        encoding="utf-8",
+    )
+    web_app.save_config({"accounts": [{"username": "保留", "uniqueId": "keep", "targets": []}]})
+    saved = web_app.read_env()
+    assert "COOKIES_KEEP" in saved
+    assert "COOKIES_GONE" not in saved
+
+
+def test_master_sync_replaces_tasks_and_deletes_removed_cookie_secret(isolated_env, monkeypatch):
+    isolated_env.write_text(
+        'TASKS=[{"username":"保留","unique_id":"keep","targets":[]}]\nCOOKIES_KEEP=' + cookie_json() + "\n",
+        encoding="utf-8",
+    )
+    requests = []
+    monkeypatch.setattr(web_app, "github_token", lambda: "token")
+    monkeypatch.setattr(web_app, "encrypted_secret", lambda value, key: "encrypted")
+
+    def request(method, path, token, payload=None):
+        requests.append((method, path, payload))
+        if path.endswith("/variables?per_page=100"):
+            remote = [
+                {"username": "保留", "unique_id": "keep", "targets": []},
+                {"username": "删除", "unique_id": "gone", "targets": []},
+            ]
+            return {"variables": [{"name": "TASKS", "value": json.dumps(remote)}]}
+        if path.endswith("/secrets/public-key"):
+            return {"key": "key", "key_id": "id"}
+        return {}
+
+    monkeypatch.setattr(web_app, "github_request", request)
+    result = web_app.sync_github()
+    task_patch = next(payload for method, path, payload in requests if method == "PATCH" and path.endswith("/variables/TASKS"))
+    assert [task["unique_id"] for task in json.loads(task_patch["value"])] == ["keep"]
+    assert any(method == "DELETE" and path.endswith("/secrets/COOKIES_GONE") for method, path, _ in requests)
+    assert result["deletedSecrets"] == ["COOKIES_GONE"]
+
+
+def test_scoped_sync_preserves_unrelated_remote_accounts(isolated_env, monkeypatch):
+    isolated_env.write_text(
+        'TASKS=[{"username":"我的更新","unique_id":"mine","targets":[]},{"username":"本机其他","unique_id":"other","targets":[]}]\n'
+        + "COOKIES_MINE=" + cookie_json() + "\nCOOKIES_OTHER=" + cookie_json() + "\n",
+        encoding="utf-8",
+    )
+    requests = []
+    monkeypatch.setattr(web_app, "github_token", lambda: "token")
+    monkeypatch.setattr(web_app, "encrypted_secret", lambda value, key: "encrypted")
+
+    def request(method, path, token, payload=None):
+        requests.append((method, path, payload))
+        if path.endswith("/variables?per_page=100"):
+            remote = [
+                {"username": "我的旧值", "unique_id": "mine", "targets": []},
+                {"username": "远端其他", "unique_id": "other", "targets": ["保留"]},
+            ]
+            return {"variables": [{"name": "TASKS", "value": json.dumps(remote)}]}
+        if path.endswith("/secrets/public-key"):
+            return {"key": "key", "key_id": "id"}
+        return {}
+
+    monkeypatch.setattr(web_app, "github_request", request)
+    result = web_app.sync_github(["mine"])
+    task_patch = next(payload for method, path, payload in requests if method == "PATCH" and path.endswith("/variables/TASKS"))
+    tasks = json.loads(task_patch["value"])
+    assert tasks[0]["username"] == "我的更新"
+    assert tasks[1]["username"] == "远端其他"
+    assert not any(method == "DELETE" for method, _, _ in requests)
+    assert result["deletedSecrets"] == []
 
 
 def test_single_account_run_endpoint_sets_account_filter():
