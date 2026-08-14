@@ -1,4 +1,4 @@
-const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null};
+const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null,overviewTargetsExpanded:false};
 const titles={overview:["运行概览","检查账号状态并启动今日任务"],accounts:["账号与好友","管理登录凭证和发送范围"],message:["消息设置","编辑每天发送的消息内容"],runtime:["运行控制","调整参数并管理任务进程"],logs:["运行日志","查看任务执行详情和异常"]};
 const hitokotoOptions=["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"];
 const $=selector=>document.querySelector(selector);
@@ -95,7 +95,12 @@ function renderOverview(){
   $("#cookieHint").textContent=ready===accounts.length?"全部账号可用":"存在未配置账号";
   $("#overviewMessage").textContent=state.config.messageTemplate;
   const targets=accounts.flatMap(a=>a.targets);
-  $("#overviewTargets").innerHTML=targets.slice(0,8).map(item=>'<span class="target-chip">'+escapeHtml(item.id)+'</span>').join("")+(targets.length>8?'<span class="target-chip more">+'+(targets.length-8)+"</span>":"");
+  if(targets.length<=8)state.overviewTargetsExpanded=false;
+  const visibleTargets=state.overviewTargetsExpanded?targets:targets.slice(0,8);
+  const chips=visibleTargets.map(item=>'<span class="target-chip">'+escapeHtml(item.id)+'</span>').join("");
+  const toggle=targets.length>8?'<button class="target-toggle" id="toggleOverviewTargets" type="button" aria-expanded="'+state.overviewTargetsExpanded+'">'+(state.overviewTargetsExpanded?'收起':'展开全部（+'+(targets.length-8)+'）')+'</button>':"";
+  $("#overviewTargets").innerHTML=chips+toggle;
+  if(targets.length>8)$("#toggleOverviewTargets").addEventListener("click",()=>{state.overviewTargetsExpanded=!state.overviewTargetsExpanded;renderOverview();});
 }
 function renderStatus(){
   if(!state.status)return;
