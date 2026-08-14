@@ -20,6 +20,8 @@ ENV_FILE = ROOT / ".env"
 LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
+SCAN_LOCK = threading.Lock()
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None}
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 
@@ -266,6 +268,7 @@ def scan_pinned_account(account_index):
     from core import tasks as task_core
     from utils.config import sanitize_cookies
 
+    update_scan_status(True, 5, "正在读取账号配置")
     config = public_config()
     try:
         account = config["accounts"][int(account_index)]
@@ -286,11 +289,15 @@ def scan_pinned_account(account_index):
     page.on("response", task_core.handle_response)
     results = []
     try:
+        update_scan_status(True, 15, "正在加载 Cookie")
         context.add_cookies(sanitize_cookies(cookies))
+        update_scan_status(True, 25, "正在打开抖音创作者中心")
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
+        update_scan_status(True, 40, "正在进入消息列表")
         task_core.open_chat_page(page)
         page.wait_for_timeout(max(1000, config["friendListWaitTime"]))
+        update_scan_status(True, 55, "正在读取会话列表")
         items = page.locator(task_core.CONVERSATION_LIST_SELECTOR).locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
         def is_pinned_item(item):
             """Douyin renders the pin marker in different nested nodes across releases."""
@@ -312,7 +319,9 @@ def scan_pinned_account(account_index):
             return ("置顶" in marker or "pinned" in marker or "pin" in marker or
                     "stick" in marker or "top-contact" in marker)
 
-        for item in items:
+        total = max(1, len(items))
+        for item_index, item in enumerate(items):
+            update_scan_status(True, 55 + int((item_index + 1) / total * 35), f"正在识别置顶会话 {item_index + 1}/{len(items)}")
             try:
                 title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
                 if not title:
@@ -327,11 +336,25 @@ def scan_pinned_account(account_index):
                 results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
             except Exception:
                 continue
+        update_scan_status(False, 100, f"扫描完成，识别到 {len(results)} 个置顶会话")
         return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
+    except Exception as exc:
+        update_scan_status(False, 100, "扫描失败", str(exc))
+        raise
     finally:
         context.close()
         browser.close()
         playwright.stop()
+
+
+def update_scan_status(running, percent, stage, error=None):
+    with SCAN_LOCK:
+        SCAN_STATUS.update({"running": running, "percent": max(0, min(100, int(percent))), "stage": stage, "error": error})
+
+
+def get_scan_status():
+    with SCAN_LOCK:
+        return dict(SCAN_STATUS)
 
 
 class TaskRunner:
@@ -462,6 +485,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(public_config())
         if parsed.path == "/api/status":
             return self.json_response(RUNNER.status())
+        if parsed.path == "/api/scan-status":
+            return self.json_response(get_scan_status())
         if parsed.path == "/api/logs":
             limit = min(1000, max(20, int(parse_qs(parsed.query).get("limit", ["200"])[0])))
             return self.json_response({"entries": tail_logs(limit)})

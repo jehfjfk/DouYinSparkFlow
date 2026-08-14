@@ -116,3 +116,9 @@ def test_single_account_run_endpoint_sets_account_filter():
     source = Path(web_app.__file__).read_text(encoding="utf-8")
     assert 'env["RUN_ACCOUNT_ID"] = account_id' in source
     assert 'self.path == "/api/run-account"' in source
+
+
+def test_scan_progress_is_clamped_and_exposed():
+    web_app.update_scan_status(True, 150, "测试")
+    status = web_app.get_scan_status()
+    assert status == {"running": True, "percent": 100, "stage": "测试", "error": None}

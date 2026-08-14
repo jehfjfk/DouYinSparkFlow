@@ -141,12 +141,22 @@ async function scanPinned(){
   if(!state.config.accounts.length){toast("请先添加并保存一个账号",true);return;}
   const index=prompt("扫描哪个账号？请输入序号（1-"+state.config.accounts.length+"）：", "1");
   if(index===null)return;
+  let progressTimer=null;
   try{
+    $("#scanProgress").classList.remove("hidden");
+    setScanProgress(0,"准备扫描");
+    progressTimer=setInterval(loadScanProgress,400);
     toast("正在打开创作者中心并扫描置顶会话...");
     const result=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:Number(index)-1})});
     state.scan=result.result;renderScanResults();toast(result.result.message||"扫描完成，请确认后加入配置");
-  }catch(error){toast(error.message,true);}
+  }catch(error){toast(error.message,true);}finally{if(progressTimer)clearInterval(progressTimer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1400);}
 }
+function setScanProgress(percent,stage){
+  $("#scanProgressFill").style.width=percent+"%";
+  $("#scanPercent").textContent=percent+"%";
+  $("#scanStage").textContent=stage;
+}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);}catch(_error){}}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
