@@ -131,13 +131,11 @@ def get_userData():
             os.getenv(cookies_key, "").encode("utf-8").decode("unicode_escape")
         )
         if not cookies_str:
-            logger.warning(f"{username} 的任务 缺少 {cookies_key} 环境变量，已跳过")
-            continue
+            raise ValueError(f"{username} 的任务缺少 {cookies_key} 环境变量")
         try:
             cookies = json.loads(cookies_str)
         except json.JSONDecodeError:
-            logger.warning(f"{username} 的任务 {cookies_key} 格式不正确，已跳过")
-            continue
+            raise ValueError(f"{username} 的任务 {cookies_key} 格式不正确")
 
         targets, target_aliases = normalize_targets(task.get("targets", []))
         userData.append(

@@ -15,6 +15,14 @@ class TaskCompletionTests(unittest.TestCase):
             users = config_module.get_userData()
             self.assertEqual([user["unique_id"] for user in users], ["old"])
         config_module.userData = None
+
+    def test_missing_account_cookie_fails_instead_of_silent_success(self):
+        tasks = '[{"username":"old","unique_id":"old","targets":[]}]'
+        with patch.dict(os.environ, {"TASKS": tasks, "COOKIES_OLD": ""}, clear=False):
+            config_module.userData = None
+            with self.assertRaisesRegex(ValueError, "COOKIES_OLD"):
+                config_module.get_userData()
+        config_module.userData = None
     def test_all_targets_found_succeeds(self):
         ensure_all_targets_found("account", set())
 
