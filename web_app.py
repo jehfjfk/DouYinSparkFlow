@@ -433,40 +433,48 @@ def refresh_account_login(account_id):
         deadline = time.monotonic() + 300
         auth_cookie_names = {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt", "uid_tt_ss"}
         qr_locked = False
+        verification_seen = False
+        main_site_attempt = 0
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
+            identity_verification = False
             try:
-                current_qr_image = qr_locator.get_attribute("src")
-                if not qr_locked and current_qr_image and current_qr_image != qr_image:
-                    qr_image = current_qr_image
-                    if qr_image.startswith("blob:"):
-                        qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
-                    update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
                 login_text = page.locator("body").inner_text(timeout=1000)
                 identity_verification = "身份验证" in login_text and any(
                     label in login_text for label in ("接收短信验证码", "手机刷脸验证", "验证登录密码")
                 )
                 if identity_verification:
                     qr_locked = True
+                    verification_seen = True
                     update_scan_status(True, 35, "已扫码：请在电脑身份验证弹窗中选择短信、刷脸或密码", qrImage=None)
                 elif "扫码成功" in login_text or "确认登录" in login_text:
                     qr_locked = True
                     update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
+                elif not qr_locked:
+                    current_qr_image = qr_locator.get_attribute("src")
+                    if current_qr_image and current_qr_image != qr_image:
+                        qr_image = current_qr_image
+                        if qr_image.startswith("blob:"):
+                            qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
+                        update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
             except Exception:
                 pass
             try:
                 qr_completed = not qr_locator.is_visible()
             except Exception:
                 qr_completed = True
-            if names.intersection(auth_cookie_names) or qr_completed:
-                update_scan_status(True, 45, "已确认扫码，正在验证抖音主站登录", loginUrl=None, qrImage=None)
+            login_confirmed = names.intersection(auth_cookie_names) or qr_completed
+            if login_confirmed and not identity_verification and (verification_seen or qr_completed):
+                qr_locked = True
+                main_site_attempt += 1
+                update_scan_status(True, 45, f"身份验证已通过，正在同步抖音主站（第 {main_site_attempt} 次）", loginUrl=None, qrImage=None)
                 page.goto(task_core.CHAT_URL, wait_until="domcontentloaded")
                 try:
                     task_core.wait_for_chat_ready(page, timeout=10000)
                     break
                 except (task_core.AuthenticationRequiredError, TimeoutError):
                     page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
-                    update_scan_status(True, 20, "创作者中心已登录，正在等待主站同步", loginUrl=None, qrImage=None)
+                    update_scan_status(True, 45, "创作者中心已登录，正在等待主站同步", loginUrl=None, qrImage=None)
             page.wait_for_timeout(2000)
         else:
             raise ValueError("等待登录超时，请重新点击后在 5 分钟内完成登录")
