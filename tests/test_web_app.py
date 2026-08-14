@@ -130,3 +130,12 @@ def test_login_refresh_updates_only_selected_cookie_secret():
     source = Path(web_app.__file__).read_text(encoding="utf-8")
     assert 'self.path == "/api/account-login-refresh"' in source
     assert 'f"COOKIES_{account_id.upper()}"' in source
+
+
+def test_dashboard_requires_password_when_configured(isolated_env):
+    isolated_env.write_text("WEB_ACCESS_PASSWORD=secret\n", encoding="utf-8")
+    handler = object.__new__(web_app.Handler)
+    handler.headers = {"Authorization": "Basic c3BhcmtmbG93OnNlY3JldA=="}
+    assert handler.authenticated() is True
+    handler.headers = {"Authorization": "Basic c3BhcmtmbG93Ondyb25n"}
+    assert handler.authenticated() is False

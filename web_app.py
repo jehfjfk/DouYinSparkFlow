@@ -1,4 +1,5 @@
 import argparse
+import hmac
 import json
 import os
 import subprocess
@@ -537,6 +538,27 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
         return
 
+    def authenticated(self):
+        password = read_env().get("WEB_ACCESS_PASSWORD", "").strip()
+        if not password:
+            return True
+        supplied = self.headers.get("Authorization", "")
+        expected = base64.b64encode(f"sparkflow:{password}".encode("utf-8")).decode("ascii")
+        return supplied.startswith("Basic ") and hmac.compare_digest(supplied[6:], expected)
+
+    def require_authentication(self):
+        if self.authenticated():
+            return False
+        body = "需要输入网站访问账号和密码".encode("utf-8")
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="DouYin Spark Flow", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def json_response(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -553,6 +575,8 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_GET(self):
+        if self.require_authentication():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/config":
             return self.json_response(public_config())
@@ -566,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.serve_static(parsed.path)
 
     def do_POST(self):
+        if self.require_authentication():
+            return
         try:
             if self.path == "/api/config":
                 return self.json_response({"ok": True, "config": save_config(self.read_json())})
