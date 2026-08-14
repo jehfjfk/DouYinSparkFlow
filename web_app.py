@@ -391,7 +391,8 @@ def refresh_account_login(account_id):
             "#douyin_login_comp_scan_code img",
             "#douyin_login_comp_scan_code canvas",
             "img[alt*='二维码'], img[alt*='扫码'], img[src*='qr']",
-            "canvas",
+            "[class*='login-card-double'] img",
+            "[class*='login-card-double'] canvas",
         ):
             candidates = page.locator(selector)
             for index in range(candidates.count() - 1, -1, -1):
@@ -399,7 +400,8 @@ def refresh_account_login(account_id):
                 try:
                     if candidate.is_visible() and (candidate.get_attribute("src") or selector.endswith("canvas") or candidate.bounding_box()):
                         box = candidate.bounding_box()
-                        if box and box["width"] >= 150 and box["height"] >= 150:
+                        is_square = box and abs(box["width"] - box["height"]) <= max(box["width"], box["height"]) * 0.12
+                        if box and is_square and box["width"] >= 150 and box["height"] >= 150:
                             qr_locator = candidate
                             break
                 except Exception:
@@ -422,7 +424,7 @@ def refresh_account_login(account_id):
                 login_url, _, _ = cv2.QRCodeDetector().detectAndDecode(matrix)
             except Exception:
                 login_url = None
-        update_scan_status(True, 20, "点击链接在抖音中确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
+        update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
