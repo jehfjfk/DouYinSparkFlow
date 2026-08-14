@@ -236,6 +236,14 @@ async function loadLogs(){
 function renderAll(){renderAccounts();renderMessage();renderRuntimeForm();renderOverview();renderStatus();}
 function bindStaticEvents(){
   $("#loginForm").addEventListener("submit",login);
+  $("#togglePassword").addEventListener("click",event=>{
+    const password=$("#loginPassword");
+    const visible=password.type==="password";
+    password.type=visible?"text":"password";
+    event.currentTarget.textContent=visible?"隐藏":"显示";
+    event.currentTarget.setAttribute("aria-label",visible?"隐藏密码":"显示密码");
+    event.currentTarget.setAttribute("aria-pressed",String(visible));
+  });
   $("#logoutButton").addEventListener("click",logout);
   $("#manageUsers").addEventListener("click",manageUsers);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
