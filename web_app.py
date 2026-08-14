@@ -387,27 +387,32 @@ def refresh_account_login(account_id):
         # the known container, then fall back to large visible QR-like images
         # or canvases instead of binding to one generated element id.
         qr_locator = None
-        for selector in (
+        selectors = (
             "#douyin_login_comp_scan_code img",
             "#douyin_login_comp_scan_code canvas",
             "img[alt*='二维码'], img[alt*='扫码'], img[src*='qr']",
             "[class*='login-card-double'] img",
             "[class*='login-card-double'] canvas",
-        ):
-            candidates = page.locator(selector)
-            for index in range(candidates.count() - 1, -1, -1):
-                candidate = candidates.nth(index)
-                try:
-                    if candidate.is_visible() and (candidate.get_attribute("src") or selector.endswith("canvas") or candidate.bounding_box()):
-                        box = candidate.bounding_box()
-                        is_square = box and abs(box["width"] - box["height"]) <= max(box["width"], box["height"]) * 0.12
-                        if box and is_square and box["width"] >= 150 and box["height"] >= 150:
-                            qr_locator = candidate
-                            break
-                except Exception:
-                    continue
-            if qr_locator:
-                break
+        )
+        qr_deadline = time.monotonic() + 25
+        while qr_locator is None and time.monotonic() < qr_deadline:
+            for selector in selectors:
+                candidates = page.locator(selector)
+                for index in range(candidates.count() - 1, -1, -1):
+                    candidate = candidates.nth(index)
+                    try:
+                        if candidate.is_visible() and (candidate.get_attribute("src") or selector.endswith("canvas") or candidate.bounding_box()):
+                            box = candidate.bounding_box()
+                            is_square = box and abs(box["width"] - box["height"]) <= max(box["width"], box["height"]) * 0.12
+                            if box and is_square and box["width"] >= 150 and box["height"] >= 150:
+                                qr_locator = candidate
+                                break
+                    except Exception:
+                        continue
+                if qr_locator:
+                    break
+            if qr_locator is None:
+                page.wait_for_timeout(500)
         if qr_locator is None:
             raise ValueError("未找到抖音登录二维码，请刷新登录窗口后重试")
         qr_locator.wait_for(state="visible", timeout=15000)
