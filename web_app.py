@@ -383,9 +383,35 @@ def refresh_account_login(account_id):
             page.wait_for_timeout(1800)
         except Exception:
             pass
-        qr_locator = page.locator("#douyin_login_comp_scan_code img").last
+        # Douyin has changed the login component markup several times. Prefer
+        # the known container, then fall back to large visible QR-like images
+        # or canvases instead of binding to one generated element id.
+        qr_locator = None
+        for selector in (
+            "#douyin_login_comp_scan_code img",
+            "#douyin_login_comp_scan_code canvas",
+            "img[alt*='二维码'], img[alt*='扫码'], img[src*='qr']",
+            "canvas",
+        ):
+            candidates = page.locator(selector)
+            for index in range(candidates.count() - 1, -1, -1):
+                candidate = candidates.nth(index)
+                try:
+                    if candidate.is_visible() and (candidate.get_attribute("src") or selector.endswith("canvas") or candidate.bounding_box()):
+                        box = candidate.bounding_box()
+                        if box and box["width"] >= 150 and box["height"] >= 150:
+                            qr_locator = candidate
+                            break
+                except Exception:
+                    continue
+            if qr_locator:
+                break
+        if qr_locator is None:
+            raise ValueError("未找到抖音登录二维码，请刷新登录窗口后重试")
         qr_locator.wait_for(state="visible", timeout=15000)
         qr_image = qr_locator.get_attribute("src")
+        if not qr_image or qr_image.startswith("blob:"):
+            qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
         login_url = None
         if qr_image and qr_image.startswith("data:image"):
             try:
