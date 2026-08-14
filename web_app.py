@@ -435,6 +435,18 @@ def refresh_account_login(account_id):
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
             try:
+                current_qr_image = qr_locator.get_attribute("src")
+                if current_qr_image and current_qr_image != qr_image:
+                    qr_image = current_qr_image
+                    if qr_image.startswith("blob:"):
+                        qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
+                    update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
+                login_text = page.locator("[class*='login-card-double']").first.inner_text(timeout=1000)
+                if "扫码成功" in login_text or "确认登录" in login_text:
+                    update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
+            except Exception:
+                pass
+            try:
                 qr_completed = not qr_locator.is_visible()
             except Exception:
                 qr_completed = True
