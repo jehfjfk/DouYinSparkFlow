@@ -16,9 +16,12 @@ logger = setup_logger(level=config.get("logLevel", "Info"))
 
 def check_cookies():
     playwright, browser = get_browser()
+    failures = []
     try:
         for user in get_userData():
             username = user.get("username", "未知用户")
+            unique_id = user.get("unique_id", "未知抖音号")
+            logger.info(f"开始检查账号 {username}（{unique_id}）Cookie")
             context = browser.new_context(
                 user_agent=WINDOWS_CHROME_USER_AGENT,
                 locale="zh-CN",
@@ -33,14 +36,17 @@ def check_cookies():
                 context.add_cookies(user["cookies"])
                 open_chat_page(page)
                 logger.info(f"账号 {username} Cookie 登录状态正常")
-            except Exception:
-                save_failure_screenshot(page, "cookie-check-failure")
-                raise
+            except Exception as error:
+                save_failure_screenshot(page, f"cookie-check-failure-{unique_id}")
+                logger.error(f"账号 {username}（{unique_id}）Cookie 检查失败: {error}")
+                failures.append(f"{username}（{unique_id}）")
             finally:
                 context.close()
     finally:
         browser.close()
         playwright.stop()
+    if failures:
+        raise RuntimeError("Cookie 登录状态异常账号: " + "、".join(failures))
 
 
 if __name__ == "__main__":
