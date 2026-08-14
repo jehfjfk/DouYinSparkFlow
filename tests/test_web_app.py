@@ -90,3 +90,23 @@ def test_github_sync_skips_empty_optional_variables(monkeypatch):
     monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": []})
     # The no-account guard runs before any GitHub call; this protects empty-value behavior by source contract.
     assert 'if value == "":\n            continue' in Path(web_app.__file__).read_text(encoding="utf-8")
+
+
+def test_merge_tasks_preserves_other_github_accounts():
+    existing = [
+        {"username": "原账号", "unique_id": "old", "targets": ["a"]},
+        {"username": "待更新", "unique_id": "same", "targets": ["before"]},
+    ]
+    local = [
+        {"username": "已更新", "unique_id": "same", "targets": ["after"]},
+        {"username": "新账号", "unique_id": "new", "targets": ["b"]},
+    ]
+    merged = web_app.merge_tasks(existing, local)
+    assert [task["unique_id"] for task in merged] == ["old", "same", "new"]
+    assert merged[0] == existing[0]
+    assert merged[1]["targets"] == ["after"]
+
+
+def test_sync_never_deletes_cookie_secrets():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert 'github_request("DELETE", f"{base}/secrets/' not in source

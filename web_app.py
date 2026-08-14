@@ -166,6 +166,20 @@ def schedule_cron(value):
     return f"{minute} {(hour - 8) % 24} * * *"
 
 
+def merge_tasks(existing_tasks, local_tasks):
+    """Upsert local accounts without removing accounts already stored on GitHub."""
+    merged = []
+    local_by_id = {str(task.get("unique_id", "")): task for task in local_tasks}
+    seen = set()
+    for task in existing_tasks:
+        unique_id = str(task.get("unique_id", ""))
+        replacement = local_by_id.get(unique_id)
+        merged.append(replacement if replacement is not None else task)
+        seen.add(unique_id)
+    merged.extend(task for unique_id, task in local_by_id.items() if unique_id not in seen)
+    return merged
+
+
 def github_token():
     token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
     if token:
@@ -214,6 +228,11 @@ def sync_github():
     token = github_token()
     owner, repo = GITHUB_REPOSITORY.split("/", 1)
     base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
+    variables = github_request("GET", f"{base}/variables?per_page=100", token).get("variables", [])
+    remote_values = {item["name"]: item["value"] for item in variables}
+    local_tasks = parse_json(env.get("TASKS", "[]"), [])
+    remote_tasks = parse_json(remote_values.get("TASKS", "[]"), [])
+    env["TASKS"] = json.dumps(merge_tasks(remote_tasks, local_tasks), ensure_ascii=False, separators=(",", ":"))
     variable_names = ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
     for name in variable_names:
         value = env.get(name, "")
@@ -238,12 +257,7 @@ def sync_github():
         github_request("PUT", f"{base}/secrets/{name}", token, {"encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"]})
         active_secrets.add(name)
 
-    existing = github_request("GET", f"{base}/secrets?per_page=100", token).get("secrets", [])
-    for secret in existing:
-        name = secret.get("name", "")
-        if name.startswith("COOKIES_") and name not in active_secrets:
-            github_request("DELETE", f"{base}/secrets/{name}", token)
-    return {"repository": GITHUB_REPOSITORY, "accounts": len(config["accounts"]), "secrets": len(active_secrets)}
+    return {"repository": GITHUB_REPOSITORY, "accounts": len(parse_json(env["TASKS"], [])), "secrets": len(active_secrets)}
 
 
 def scan_pinned_account(account_index):
