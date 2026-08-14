@@ -32,6 +32,13 @@ async function manageUsers(){
   }catch(error){toast(error.message,true);}
 }
 function closeUserManager(){$("#userModal").classList.add("hidden");}
+function createBoundAccount(){
+  closeUserManager();clearScanResults();
+  state.config.accounts.push({username:"",uniqueId:"",messageTemplate:state.config.messageTemplate,targets:[],cookieConfigured:false,cookieCount:0});
+  renderAccounts();switchView("accounts");
+  setTimeout(()=>$("#accountList .account-card:last-child")?.scrollIntoView({behavior:"smooth",block:"start"}),100);
+  toast("请先填写新抖音账号并完成登录，然后点击保存并同步");
+}
 async function saveWebsiteUser(event){
   event.preventDefault();$("#userFormError").textContent="";
   try{
@@ -284,6 +291,7 @@ function bindStaticEvents(){
   $("#userForm").addEventListener("submit",saveWebsiteUser);
   $("#closeUserModal").addEventListener("click",closeUserManager);
   $("#cancelUserModal").addEventListener("click",closeUserManager);
+  $("#createBoundAccount").addEventListener("click",createBoundAccount);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
