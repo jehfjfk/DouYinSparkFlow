@@ -157,3 +157,17 @@ def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):
     assert result["login"]["continued"] is True
     assert result["scan"]["accountIndex"] == 1
     assert web_app.get_scan_status()["scanResult"] == result["scan"]
+
+
+def test_closed_login_browser_is_rebuilt_once(monkeypatch):
+    monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": [{"uniqueId": "selected"}]})
+    calls = []
+    def refresh(account_id, continue_to_scan=False):
+        calls.append(account_id)
+        if len(calls) == 1:
+            raise RuntimeError("Target page, context or browser has been closed")
+        return {"accountId": account_id, "cookieCount": 3}
+    monkeypatch.setattr(web_app, "refresh_account_login", refresh)
+    monkeypatch.setattr(web_app, "scan_pinned_account", lambda index, finalize=True: {"contacts": [], "accountIndex": index})
+    assert web_app.refresh_login_and_scan("selected")["login"]["cookieCount"] == 3
+    assert len(calls) == 2

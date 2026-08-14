@@ -23,6 +23,7 @@ LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
+LOGIN_LOCK = threading.Lock()
 SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None}
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
@@ -501,14 +502,30 @@ def refresh_account_login(account_id, continue_to_scan=False):
 
 def refresh_login_and_scan(account_id):
     """Finish the selected account's login, Cookie sync, and pinned scan as one recoverable job."""
-    accounts = public_config()["accounts"]
-    account_index = next((index for index, item in enumerate(accounts) if item["uniqueId"] == str(account_id)), None)
-    if account_index is None:
-        raise ValueError("指定账号不存在")
-    login_result = refresh_account_login(account_id, continue_to_scan=True)
-    scan_result = scan_pinned_account(account_index, finalize=False)
-    update_scan_status(False, 100, f"登录已更新并完成置顶好友扫描，识别到 {len(scan_result['contacts'])} 人", loginUrl=None, qrImage=None, scanResult=scan_result)
-    return {"login": login_result, "scan": scan_result}
+    if not LOGIN_LOCK.acquire(blocking=False):
+        raise ValueError("已有账号正在更新登录，请等待当前任务完成")
+    try:
+        accounts = public_config()["accounts"]
+        account_index = next((index for index, item in enumerate(accounts) if item["uniqueId"] == str(account_id)), None)
+        if account_index is None:
+            raise ValueError("指定账号不存在")
+        login_result = None
+        for attempt in range(2):
+            try:
+                login_result = refresh_account_login(account_id, continue_to_scan=True)
+                break
+            except Exception as exc:
+                if attempt == 0 and "has been closed" in str(exc):
+                    update_scan_status(True, 5, "登录浏览器意外中断，正在自动重建会话", error=None, loginUrl=None, qrImage=None)
+                    continue
+                if "has been closed" in str(exc):
+                    raise ValueError("登录浏览器会话已中断，请重新点击更新登录") from exc
+                raise
+        scan_result = scan_pinned_account(account_index, finalize=False)
+        update_scan_status(False, 100, f"登录已更新并完成置顶好友扫描，识别到 {len(scan_result['contacts'])} 人", loginUrl=None, qrImage=None, scanResult=scan_result)
+        return {"login": login_result, "scan": scan_result}
+    finally:
+        LOGIN_LOCK.release()
 
 
 class TaskRunner:
