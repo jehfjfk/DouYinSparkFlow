@@ -361,9 +361,12 @@ def scan_pinned_account(account_index, finalize=True):
                 const nodes = [element, ...element.querySelectorAll('*')];
                 const scroller = nodes.find(node => node.scrollHeight > node.clientHeight + 4) || element;
                 const before = scroller.scrollTop;
+                const beforeBottom = before + scroller.clientHeight >= scroller.scrollHeight - 4;
                 scroller.scrollTop = Math.min(scroller.scrollHeight, before + Math.max(200, scroller.clientHeight * 0.8));
-                return {before, after: scroller.scrollTop, bottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4};
+                return {before, after: scroller.scrollTop, beforeBottom, bottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4};
             }""")
+            if scroll_state["beforeBottom"]:
+                break
             page.wait_for_timeout(500)
             stable_rounds = stable_rounds + 1 if new_rows == 0 and (scroll_state["bottom"] or scroll_state["after"] == scroll_state["before"]) else 0
             if stable_rounds >= 3:

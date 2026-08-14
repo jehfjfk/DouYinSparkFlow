@@ -20,3 +20,4 @@ def test_scan_traverses_virtualized_conversation_list_until_stable_bottom():
     assert "scroller.clientHeight * 0.8" in source
     assert "stable_rounds >= 3" in source
     assert "seen_titles" in source
+    assert 'if scroll_state["beforeBottom"]:' in source
