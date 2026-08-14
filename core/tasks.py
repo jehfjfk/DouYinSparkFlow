@@ -179,7 +179,7 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
                 raise
 
 def checkTargetName(targetName, targets, target_aliases=None, identity_map=None):
-    """按实时抖音号、直接名称、持久化别名的顺序匹配目标。"""
+    """按实时抖音号、会话/群聊名称、持久化别名的顺序匹配目标。"""
     target_name = norm(targetName)
     target_set = set(targets)
     identity_map = userIDDict if identity_map is None else identity_map

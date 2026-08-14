@@ -3,6 +3,10 @@ import os
 from unittest.mock import patch
 
 from core.tasks import TargetNotFoundError, checkTargetName, ensure_all_targets_found
+
+
+def test_group_chat_matches_directly_by_conversation_title():
+    assert checkTargetName("周末续火群", ["周末续火群"], identity_map={}) == "周末续火群"
 from utils.config import normalize_targets
 import utils.config as config_module
 

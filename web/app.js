@@ -37,7 +37,7 @@ function accountMarkup(account,index){
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
-    '<div class="field full"><span>目标好友</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+'</div></div>'+
+    '<div class="field full"><span>目标好友 / 群聊</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号或群聊名称"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+'</div></div>'+
     '<div class="field full"><span>Cookie JSON</span><div class="cookie-row"><textarea data-field="cookies" placeholder="已有 Cookie 不会回显。仅在需要更新时粘贴新的 JSON。"></textarea><div class="cookie-badge"><strong>'+(account.cookieCount||0)+'</strong><span>'+(account.cookieConfigured?"已安全保存":"等待导入")+'</span></div></div></div>'+
     '</div></article>';
 }
@@ -160,7 +160,7 @@ function setScanProgress(percent,stage){
 async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const key=JSON.stringify([status.scanResult.accountIndex,(status.scanResult.contacts||[]).map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=status.scanResult;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
-  $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
+  $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。好友使用抖音号，群聊使用群名称。";
   $("#scanResults").innerHTML=(state.scan.contacts||[]).map((item,i)=>'<label class="scan-row"><input type="checkbox" data-scan-index="'+i+'" checked><span><strong>'+escapeHtml(item.uniqueId||item.shortId||"未获取抖音号")+'</strong><small>'+escapeHtml(item.nickname)+(item.remark&&item.remark!==item.nickname?' · '+escapeHtml(item.remark):'')+'</small></span></label>').join("")||'<div class="empty">未识别到置顶会话。普通消息联系人不会加入扫描结果。</div>';
 }
 function clearScanResults(){
