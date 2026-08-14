@@ -121,7 +121,9 @@ def test_single_account_run_endpoint_sets_account_filter():
 def test_scan_progress_is_clamped_and_exposed():
     web_app.update_scan_status(True, 150, "测试")
     status = web_app.get_scan_status()
-    assert status == {"running": True, "percent": 100, "stage": "测试", "error": None}
+    assert status["running"] is True
+    assert status["percent"] == 100
+    assert status["stage"] == "测试"
 
 
 def test_login_refresh_updates_only_selected_cookie_secret():

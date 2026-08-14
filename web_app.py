@@ -22,7 +22,7 @@ LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
-SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None}
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None}
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 
@@ -269,7 +269,7 @@ def scan_pinned_account(account_index):
     from core import tasks as task_core
     from utils.config import sanitize_cookies
 
-    update_scan_status(True, 5, "正在读取账号配置")
+    update_scan_status(True, 5, "正在读取账号配置", loginUrl=None, qrImage=None)
     config = public_config()
     try:
         account = config["accounts"][int(account_index)]
@@ -348,9 +348,10 @@ def scan_pinned_account(account_index):
         playwright.stop()
 
 
-def update_scan_status(running, percent, stage, error=None):
+def update_scan_status(running, percent, stage, error=None, **extra):
     with SCAN_LOCK:
         SCAN_STATUS.update({"running": running, "percent": max(0, min(100, int(percent))), "stage": stage, "error": error})
+        SCAN_STATUS.update(extra)
 
 
 def get_scan_status():
@@ -367,13 +368,29 @@ def refresh_account_login(account_id):
     account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
     if not account:
         raise ValueError("指定账号不存在")
-    update_scan_status(True, 5, "正在打开登录窗口")
+    update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None)
     playwright, browser = get_browser()
     context = browser.new_context(user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN", timezone_id="Asia/Shanghai")
     page = context.new_page()
     try:
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
-        update_scan_status(True, 20, "请在弹出的窗口完成抖音登录")
+        try:
+            page.get_by_text("创作者登录", exact=True).click()
+            page.wait_for_timeout(1800)
+        except Exception:
+            pass
+        qr_image = page.locator("#douyin_login_comp_scan_code img").last.get_attribute("src")
+        login_url = None
+        if qr_image and qr_image.startswith("data:image"):
+            try:
+                import cv2
+                import numpy as np
+                image_bytes = base64.b64decode(qr_image.split(",", 1)[1])
+                matrix = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+                login_url, _, _ = cv2.QRCodeDetector().detectAndDecode(matrix)
+            except Exception:
+                login_url = None
+        update_scan_status(True, 20, "点击链接在抖音中确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             names = {cookie.get("name") for cookie in context.cookies()}
@@ -399,7 +416,7 @@ def refresh_account_login(account_id):
         github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
             "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
         })
-        update_scan_status(False, 100, "Cookie 已更新到本机和 GitHub")
+        update_scan_status(False, 100, "登录已更新，准备扫描置顶好友", loginUrl=None, qrImage=None)
         return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
     except Exception as exc:
         update_scan_status(False, 100, "登录更新失败", str(exc))

@@ -157,7 +157,7 @@ function setScanProgress(percent,stage){
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
 }
-async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);}catch(_error){}}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.loginUrl){$("#loginLink").href=status.loginUrl;$("#loginQr").src=status.qrImage||"";row.classList.remove("hidden");}else{row.classList.add("hidden");}}catch(_error){}}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
@@ -199,7 +199,9 @@ async function refreshAccountLogin(index){
     $("#scanProgress").classList.remove("hidden");setScanProgress(0,"准备打开登录窗口");
     timer=setInterval(loadScanProgress,500);
     const result=await api("/api/account-login-refresh",{method:"POST",body:JSON.stringify({accountId:account.uniqueId})});
-    account.cookieConfigured=true;account.cookieCount=result.result.cookieCount;renderAccounts();toast("登录状态已更新到本机和 GitHub");
+    account.cookieConfigured=true;account.cookieCount=result.result.cookieCount;renderAccounts();toast("登录状态已更新，正在扫描置顶好友");
+    const scan=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:index})});
+    state.scan=scan.result;renderScanResults();toast(scan.result.message||"置顶好友扫描完成");
   }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
 }
 async function stopRun(){
