@@ -248,6 +248,33 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
     assert web_app.authenticate_web_user("member", "wrongpass") is None
 
 
+def test_unbound_mobile_user_claims_one_new_account(tmp_path, monkeypatch, isolated_env):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    web_app.upsert_web_user("mobile", "password8", account_ids=[])
+    isolated_env.write_text(
+        'TASKS=[{"username":"现有","unique_id":"existing","message_template":"原消息","targets":[]}]\n',
+        encoding="utf-8",
+    )
+    session = {"username": "mobile", "role": "account", "accountIds": []}
+    config = web_app.provision_first_account({"accounts": [{
+        "username": "手机新增", "uniqueId": "claimed", "messageTemplate": "新消息", "targets": [],
+    }]}, session)
+    assert session["accountIds"] == ["claimed"]
+    assert [account["uniqueId"] for account in config["accounts"]] == ["claimed"]
+    assert web_app.authenticate_web_user("mobile", "password8")["accountIds"] == ["claimed"]
+    assert [task["unique_id"] for task in json.loads(web_app.read_env()["TASKS"])] == ["existing", "claimed"]
+
+
+def test_unbound_mobile_user_cannot_claim_existing_account(tmp_path, monkeypatch, isolated_env):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    web_app.upsert_web_user("mobile", "password8", account_ids=[])
+    isolated_env.write_text('TASKS=[{"username":"现有","unique_id":"existing","targets":[]}]\n', encoding="utf-8")
+    session = {"username": "mobile", "role": "account", "accountIds": []}
+    with pytest.raises(ValueError, match="已经被其他用户绑定"):
+        web_app.provision_first_account({"accounts": [{"username": "重复", "uniqueId": "existing", "targets": []}]}, session)
+    assert session["accountIds"] == []
+
+
 def test_scoped_save_preserves_other_accounts(isolated_env):
     isolated_env.write_text(
         'TASKS=[{"username":"A","unique_id":"a","message_template":"A旧消息","targets":[]},{"username":"B","unique_id":"b","message_template":"B保留消息","targets":[]}]\n',

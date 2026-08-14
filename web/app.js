@@ -19,31 +19,23 @@ function toast(message,error=false){
   setTimeout(()=>node.remove(),3600);
 }
 function showLogin(message=""){$("#appShell").classList.add("hidden");$("#loginScreen").classList.remove("hidden");$("#loginError").textContent=message;}
-function showApp(){$("#loginScreen").classList.add("hidden");$("#appShell").classList.remove("hidden");document.body.classList.toggle("restricted-user",state.session.role!=="master");$("#manageUsers").classList.toggle("hidden",!state.session.canRegister);$("#logoutButton").classList.toggle("hidden",Boolean(state.session.localAutoLogin));}
+function showApp(){$("#loginScreen").classList.add("hidden");$("#appShell").classList.remove("hidden");document.body.classList.toggle("restricted-user",state.session.role!=="master");document.body.classList.toggle("unbound-user",state.session.role==="account"&&!state.session.accountIds.length);$("#manageUsers").classList.toggle("hidden",!state.session.canRegister);$("#logoutButton").classList.toggle("hidden",Boolean(state.session.localAutoLogin));}
 async function login(event){event.preventDefault();$("#loginError").textContent="";try{await api("/api/auth/login",{method:"POST",body:JSON.stringify({username:$("#loginUsername").value,password:$("#loginPassword").value})});await initAuthenticated();}catch(error){showLogin(error.message);}}
 async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}"});}finally{location.reload();}}
 async function manageUsers(){
   try{
     const data=await api("/api/users");
-    $("#userAccountSelect").innerHTML=state.config.accounts.map(account=>'<option value="'+escapeHtml(account.uniqueId)+'">'+escapeHtml(account.username)+" · "+escapeHtml(account.uniqueId)+"</option>").join("");
     $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
     $("#websiteUsername").value="";$("#websitePassword").value="";$("#userFormError").textContent="";
     $("#userModal").classList.remove("hidden");
   }catch(error){toast(error.message,true);}
 }
 function closeUserManager(){$("#userModal").classList.add("hidden");}
-function createBoundAccount(){
-  closeUserManager();clearScanResults();
-  state.config.accounts.push({username:"",uniqueId:"",messageTemplate:state.config.messageTemplate,targets:[],cookieConfigured:false,cookieCount:0});
-  renderAccounts();switchView("accounts");
-  setTimeout(()=>$("#accountList .account-card:last-child")?.scrollIntoView({behavior:"smooth",block:"start"}),100);
-  toast("请先填写新抖音账号并完成登录，然后点击保存并同步");
-}
 async function saveWebsiteUser(event){
   event.preventDefault();$("#userFormError").textContent="";
   try{
-    await api("/api/users",{method:"POST",body:JSON.stringify({username:$("#websiteUsername").value.trim(),password:$("#websitePassword").value,accountIds:[$("#userAccountSelect").value]})});
-    closeUserManager();toast("手机端登录账号已保存");
+    await api("/api/users",{method:"POST",body:JSON.stringify({username:$("#websiteUsername").value.trim(),password:$("#websitePassword").value})});
+    closeUserManager();toast("登录账号已创建，请让用户在手机端完成抖音登录");
   }catch(error){$("#userFormError").textContent=error.message;}
 }
 function escapeHtml(value){
@@ -246,6 +238,9 @@ async function refreshAccountLogin(index){
   if(!account||!account.uniqueId){toast("请先填写并保存账号抖音号",true);return;}
   let timer=null;
   try{
+    if(state.session.role==="account"&&!state.session.accountIds.length){
+      await saveConfig(false);state.session.accountIds=[account.uniqueId];document.body.classList.remove("unbound-user");
+    }
     $("#scanProgress").classList.remove("hidden");setScanProgress(0,"准备打开登录窗口");
     timer=setInterval(loadScanProgress,500);
     let result=null,requestError=null;
@@ -291,7 +286,6 @@ function bindStaticEvents(){
   $("#userForm").addEventListener("submit",saveWebsiteUser);
   $("#closeUserModal").addEventListener("click",closeUserManager);
   $("#cancelUserModal").addEventListener("click",closeUserManager);
-  $("#createBoundAccount").addEventListener("click",createBoundAccount);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));

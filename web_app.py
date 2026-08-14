@@ -145,6 +145,20 @@ def upsert_web_user(username, password, role="account", account_ids=None):
     return {"username": username, "role": role, "accountIds": record["accountIds"]}
 
 
+def bind_web_user_account(username, account_id):
+    with USER_LOCK:
+        data = load_web_users()
+        user = next((item for item in data["users"] if item["username"] == username and item["role"] == "account"), None)
+        if not user:
+            raise ValueError("网站用户不存在")
+        if user.get("accountIds"):
+            raise ValueError("网站用户已经绑定抖音账号")
+        user["accountIds"] = [account_id]
+        temporary = WEB_USERS_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, WEB_USERS_FILE)
+
+
 def authenticate_web_user(username, password):
     user = next((item for item in load_web_users()["users"] if item["username"] == str(username)), None)
     if not user:
@@ -248,6 +262,30 @@ def save_scoped_config(payload, allowed_account_ids=None):
     }
     save_config(scoped_payload)
     return public_config(allowed)
+
+
+def provision_first_account(payload, user):
+    submitted = payload.get("accounts", [])
+    if len(submitted) != 1:
+        raise ValueError("首次配置只能添加一个抖音账号")
+    account = submitted[0]
+    account_id = str(account.get("uniqueId", "")).strip()
+    if not account_id:
+        raise ValueError("请先填写抖音号")
+    current = public_config()
+    if any(item["uniqueId"] == account_id for item in current["accounts"]):
+        raise ValueError("该抖音账号已经被其他用户绑定")
+    merged_payload = {
+        "accounts": current["accounts"] + [account],
+        "messageTemplate": current["messageTemplate"], "hitokotoTypes": current["hitokotoTypes"],
+        "matchMode": current["matchMode"], "browserTimeout": current["browserTimeout"],
+        "friendListWaitTime": current["friendListWaitTime"], "taskRetryTimes": current["taskRetryTimes"],
+        "scheduleTime": current["scheduleTime"], "logLevel": current["logLevel"],
+    }
+    save_config(merged_payload)
+    bind_web_user_account(user["username"], account_id)
+    user["accountIds"] = [account_id]
+    return public_config([account_id])
 
 
 def validate_schedule_time(value):
@@ -919,9 +957,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.local_master():
                     return self.json_response({"error": "仅本机主账号可注册网站用户"}, 403)
                 payload = self.read_json()
-                return self.json_response({"ok": True, "user": upsert_web_user(payload.get("username"), payload.get("password"), "account", payload.get("accountIds", []))})
+                return self.json_response({"ok": True, "user": upsert_web_user(payload.get("username"), payload.get("password"), "account", [])})
             if self.path == "/api/config":
-                return self.json_response({"ok": True, "config": save_scoped_config(self.read_json(), self.allowed_account_ids())})
+                payload = self.read_json()
+                user = self.current_user()
+                if user["role"] == "account" and not user.get("accountIds"):
+                    config = provision_first_account(payload, user)
+                else:
+                    config = save_scoped_config(payload, self.allowed_account_ids())
+                return self.json_response({"ok": True, "config": config})
             if self.path == "/api/github/sync":
                 return self.json_response({"ok": True, "result": sync_github(self.allowed_account_ids())})
             if self.path == "/api/scan-pinned":
