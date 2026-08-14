@@ -270,7 +270,7 @@ def scan_pinned_account(account_index, finalize=True):
     from core import tasks as task_core
     from utils.config import sanitize_cookies
 
-    update_scan_status(True, 5, "正在读取账号配置", loginUrl=None, qrImage=None)
+    update_scan_status(True, 5, "正在读取账号配置", loginUrl=None, qrImage=None, scanResult=None)
     config = public_config()
     try:
         account = config["accounts"][int(account_index)]

@@ -1,4 +1,4 @@
-const state={config:null,status:null,view:"overview",logTimer:null,statusTimer:null};
+const state={config:null,status:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null};
 const titles={overview:["运行概览","检查账号状态并启动今日任务"],accounts:["账号与好友","管理登录凭证和发送范围"],message:["消息设置","编辑每天发送的消息内容"],runtime:["运行控制","调整参数并管理任务进程"],logs:["运行日志","查看任务执行详情和异常"]};
 const hitokotoOptions=["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"];
 const $=selector=>document.querySelector(selector);
@@ -157,7 +157,7 @@ function setScanProgress(percent,stage){
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
 }
-async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}}catch(_error){}}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const key=JSON.stringify([status.scanResult.accountIndex,(status.scanResult.contacts||[]).map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=status.scanResult;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
@@ -253,7 +253,7 @@ async function init(){
   $("#todayDate").textContent=new Date().toLocaleDateString("zh-CN",{month:"long",day:"numeric",weekday:"short"});
   try{
     const results=await Promise.all([api("/api/config"),api("/api/status")]);
-    state.config=results[0];state.status=results[1];renderAll();await loadLogs();
+    state.config=results[0];state.status=results[1];renderAll();await Promise.all([loadLogs(),loadScanProgress()]);
     state.statusTimer=setInterval(loadStatus,3000);
     state.logTimer=setInterval(()=>{if(state.view==="logs"||state.view==="overview")loadLogs();},5000);
   }catch(error){toast(error.message,true);}
