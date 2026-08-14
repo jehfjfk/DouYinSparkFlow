@@ -1,4 +1,5 @@
-const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null,overviewTargetsExpanded:false};
+function storedExpandedAccounts(){try{return new Set(JSON.parse(localStorage.getItem("expandedAccountTargets")||"[]"));}catch(_error){return new Set();}}
+const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null,overviewTargetsExpanded:localStorage.getItem("overviewTargetsExpanded")==="true",expandedAccountTargets:storedExpandedAccounts()};
 const titles={overview:["运行概览","检查账号状态并启动今日任务"],accounts:["账号与好友","管理登录凭证和发送范围"],message:["消息设置","编辑每天发送的消息内容"],runtime:["运行控制","调整参数并管理任务进程"],logs:["运行日志","查看任务执行详情和异常"]};
 const hitokotoOptions=["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"];
 const $=selector=>document.querySelector(selector);
@@ -35,14 +36,18 @@ function switchView(view){
   if(view==="logs")loadLogs();
 }
 function accountMarkup(account,index){
-  const targets=account.targets.map((target,i)=>'<span class="editable-chip"><strong>'+escapeHtml(target.id)+'</strong>'+(target.aliases.length?' · '+escapeHtml(target.aliases.join(" / ")):'')+'<button data-action="remove-target" data-target-index="'+i+'" title="移除">×</button></span>').join("");
+  const targetKey=account.uniqueId||"account-"+index;
+  const expanded=state.expandedAccountTargets.has(targetKey);
+  const visibleTargets=expanded?account.targets:account.targets.slice(0,8);
+  const targets=visibleTargets.map((target,i)=>'<span class="editable-chip"><strong>'+escapeHtml(target.id)+'</strong>'+(target.aliases.length?' · '+escapeHtml(target.aliases.join(" / ")):'')+'<button data-action="remove-target" data-target-index="'+i+'" title="移除">×</button></span>').join("");
+  const targetToggle=account.targets.length>8?'<button class="target-toggle" data-action="toggle-targets" data-target-key="'+escapeHtml(targetKey)+'" type="button" aria-expanded="'+expanded+'">'+(expanded?'收起':'展开全部（+'+(account.targets.length-8)+'）')+'</button>':"";
   return '<article class="account-card" data-index="'+index+'">'+
     '<div class="account-head"><span class="account-index">账号 '+String(index+1).padStart(2,"0")+'</span><div><span class="account-status">'+
     (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span><button class="text-button" data-action="login-refresh" title="网页登录并自动更新 Cookie">更新登录</button><button class="text-button" data-action="run-account" title="仅运行此账号">运行此账号</button><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
-    '<div class="field full"><span>目标好友 / 群聊</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号或群聊名称"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+'</div></div>'+
+    '<div class="field full"><span>目标好友 / 群聊</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号或群聊名称"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+targetToggle+'</div></div>'+
     '<div class="field full"><span>Cookie JSON</span><div class="cookie-row"><textarea data-field="cookies" placeholder="已有 Cookie 不会回显。仅在需要更新时粘贴新的 JSON。"></textarea><div class="cookie-badge"><strong>'+(account.cookieCount||0)+'</strong><span>'+(account.cookieConfigured?"已安全保存":"等待导入")+'</span></div></div></div>'+
     '</div></article>';
 }
@@ -63,6 +68,13 @@ function bindAccountEvents(){
       if(id&&!state.config.accounts[index].targets.some(target=>target.id===id)){state.config.accounts[index].targets.push({id,aliases});renderAccounts();}
     };
     card.querySelector('[data-action="add-target"]').addEventListener("click",add);
+    const targetToggle=card.querySelector('[data-action="toggle-targets"]');
+    if(targetToggle)targetToggle.addEventListener("click",()=>{
+      const key=targetToggle.dataset.targetKey;
+      if(state.expandedAccountTargets.has(key))state.expandedAccountTargets.delete(key);else state.expandedAccountTargets.add(key);
+      localStorage.setItem("expandedAccountTargets",JSON.stringify([...state.expandedAccountTargets]));
+      renderAccounts();
+    });
     card.querySelectorAll('[data-role^="target-"]').forEach(input=>input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();add();}}));
     card.querySelector('[data-action="remove-account"]').addEventListener("click",()=>{
       if(confirm("删除此账号及好友配置？同步后对应 Cookie Secret 也会删除。")){state.config.accounts.splice(index,1);renderAccounts();}
@@ -95,12 +107,12 @@ function renderOverview(){
   $("#cookieHint").textContent=ready===accounts.length?"全部账号可用":"存在未配置账号";
   $("#overviewMessage").textContent=state.config.messageTemplate;
   const targets=accounts.flatMap(a=>a.targets);
-  if(targets.length<=8)state.overviewTargetsExpanded=false;
+  if(targets.length<=8){state.overviewTargetsExpanded=false;localStorage.removeItem("overviewTargetsExpanded");}
   const visibleTargets=state.overviewTargetsExpanded?targets:targets.slice(0,8);
   const chips=visibleTargets.map(item=>'<span class="target-chip">'+escapeHtml(item.id)+'</span>').join("");
   const toggle=targets.length>8?'<button class="target-toggle" id="toggleOverviewTargets" type="button" aria-expanded="'+state.overviewTargetsExpanded+'">'+(state.overviewTargetsExpanded?'收起':'展开全部（+'+(targets.length-8)+'）')+'</button>':"";
   $("#overviewTargets").innerHTML=chips+toggle;
-  if(targets.length>8)$("#toggleOverviewTargets").addEventListener("click",()=>{state.overviewTargetsExpanded=!state.overviewTargetsExpanded;renderOverview();});
+  if(targets.length>8)$("#toggleOverviewTargets").addEventListener("click",()=>{state.overviewTargetsExpanded=!state.overviewTargetsExpanded;localStorage.setItem("overviewTargetsExpanded",String(state.overviewTargetsExpanded));renderOverview();});
 }
 function renderStatus(){
   if(!state.status)return;
