@@ -360,21 +360,30 @@ class TaskRunner:
                 "lastExitCode": self.last_exit_code,
             }
 
-    def start(self):
+    def start(self, account_id=None):
         with self.lock:
             self.refresh()
             if self.process:
                 raise ValueError("任务正在运行")
             config = public_config()
-            if not config["accounts"] or not any(item["targets"] for item in config["accounts"]):
+            accounts = config["accounts"]
+            if account_id:
+                accounts = [item for item in accounts if item["uniqueId"] == account_id]
+                if not accounts:
+                    raise ValueError("指定账号不存在")
+            if not accounts or not any(item["targets"] for item in accounts):
                 raise ValueError("请先配置至少一个目标好友")
-            missing = [item["username"] for item in config["accounts"] if not item["cookieConfigured"]]
+            missing = [item["username"] for item in accounts if not item["cookieConfigured"]]
             if missing:
                 raise ValueError("以下账号缺少 Cookie：" + "、".join(missing))
             (ROOT / "logs").mkdir(exist_ok=True)
             self.output = RUN_LOG_FILE.open("ab", buffering=0)
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
+            if account_id:
+                env["RUN_ACCOUNT_ID"] = account_id
+            else:
+                env.pop("RUN_ACCOUNT_ID", None)
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             python = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             executable = str(python if python.exists() else sys.executable)
@@ -469,6 +478,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
             if self.path == "/api/run":
                 return self.json_response({"ok": True, "status": RUNNER.start()})
+            if self.path == "/api/run-account":
+                payload = self.read_json()
+                return self.json_response({"ok": True, "status": RUNNER.start(str(payload.get("accountId", "")).strip())})
             if self.path == "/api/stop":
                 return self.json_response({"ok": True, "status": RUNNER.stop()})
             self.json_response({"error": "接口不存在"}, 404)

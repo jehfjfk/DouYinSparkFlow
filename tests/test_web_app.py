@@ -110,3 +110,9 @@ def test_merge_tasks_preserves_other_github_accounts():
 def test_sync_never_deletes_cookie_secrets():
     source = Path(web_app.__file__).read_text(encoding="utf-8")
     assert 'github_request("DELETE", f"{base}/secrets/' not in source
+
+
+def test_single_account_run_endpoint_sets_account_filter():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert 'env["RUN_ACCOUNT_ID"] = account_id' in source
+    assert 'self.path == "/api/run-account"' in source
