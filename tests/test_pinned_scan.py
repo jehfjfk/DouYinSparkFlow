@@ -19,5 +19,13 @@ def test_scan_traverses_virtualized_conversation_list_until_stable_bottom():
     assert "for scan_round in range(60)" in source
     assert "scroller.clientHeight * 0.8" in source
     assert "stable_rounds >= 3" in source
-    assert "seen_titles" in source
+    assert "seen_rows" in source
     assert 'if scroll_state["beforeBottom"]:' in source
+
+
+def test_scan_starts_at_top_and_deduplicates_rows_and_results():
+    source = Path("web_app.py").read_text(encoding="utf-8")
+    assert "scroller.scrollTop = 0" in source
+    assert "data-conversation-id" in source
+    assert "result_keys = set()" in source
+    assert "result_key = unique_id or short_id or title" in source

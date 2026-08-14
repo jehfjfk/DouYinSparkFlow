@@ -322,21 +322,39 @@ def scan_pinned_account(account_index, finalize=True):
             return ("置顶" in marker or "pinned" in marker or "pin" in marker or
                     "stick" in marker or "top-contact" in marker)
 
-        seen_titles = set()
+        conversation_list.evaluate("""element => {
+            const nodes = [element, ...element.querySelectorAll('*')];
+            const scroller = nodes.find(node => node.scrollHeight > node.clientHeight + 4) || element;
+            scroller.scrollTop = 0;
+        }""")
+        page.wait_for_timeout(300)
+        seen_rows = set()
+        result_keys = set()
         stable_rounds = 0
         for scan_round in range(60):
             items = conversation_list.locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
             new_rows = 0
-            update_scan_status(True, min(92, 55 + scan_round * 2), f"正在遍历会话列表，已读取 {len(seen_titles)} 个会话")
+            update_scan_status(True, min(92, 55 + scan_round * 2), f"正在遍历会话列表，已读取 {len(seen_rows)} 个会话")
             for item in items:
                 try:
                     title = task_core.norm(item.locator(task_core.CONVERSATION_TITLE_SELECTOR).inner_text())
                     if not title:
                         row_lines = [task_core.norm(line) for line in item.inner_text().splitlines() if task_core.norm(line)]
                         title = row_lines[0] if row_lines else ""
-                    if not title or title in seen_titles:
+                    if not title:
                         continue
-                    seen_titles.add(title)
+                    row_key = item.evaluate("""(element, title) => {
+                        const attrs = ['data-id','data-key','data-conversation-id','data-e2e','aria-label']
+                            .map(name => element.getAttribute(name) || '').filter(Boolean);
+                        const avatars = [...element.querySelectorAll('img')].map(img => {
+                            try { return new URL(img.currentSrc || img.src, location.href).pathname; }
+                            catch (_) { return img.currentSrc || img.src || ''; }
+                        }).filter(Boolean);
+                        return [title, ...attrs, ...avatars].join('|');
+                    }""", title)
+                    if row_key in seen_rows:
+                        continue
+                    seen_rows.add(row_key)
                     new_rows += 1
                     if not is_pinned_item(item):
                         continue
@@ -353,7 +371,13 @@ def scan_pinned_account(account_index, finalize=True):
                         if identity:
                             break
                         page.wait_for_timeout(200)
-                    results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
+                    short_id = identity[0] if identity else ""
+                    unique_id = identity[1] if len(identity) > 1 else ""
+                    result_key = unique_id or short_id or title
+                    if result_key in result_keys:
+                        continue
+                    result_keys.add(result_key)
+                    results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": short_id, "uniqueId": unique_id, "pinned": True})
                 except Exception:
                     continue
 
