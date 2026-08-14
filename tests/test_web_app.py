@@ -139,3 +139,21 @@ def test_dashboard_requires_password_when_configured(isolated_env):
     assert handler.authenticated() is True
     handler.headers = {"Authorization": "Basic c3BhcmtmbG93Ondyb25n"}
     assert handler.authenticated() is False
+
+
+def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):
+    monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": [
+        {"uniqueId": "old"}, {"uniqueId": "selected"},
+    ]})
+    monkeypatch.setattr(web_app, "refresh_account_login", lambda account_id, continue_to_scan=False: {
+        "accountId": account_id, "cookieCount": 8, "continued": continue_to_scan,
+    })
+    monkeypatch.setattr(web_app, "scan_pinned_account", lambda index, finalize=True: {
+        "accountIndex": index, "contacts": [{"uniqueId": "friend"}], "message": "ok",
+    })
+
+    result = web_app.refresh_login_and_scan("selected")
+
+    assert result["login"]["continued"] is True
+    assert result["scan"]["accountIndex"] == 1
+    assert web_app.get_scan_status()["scanResult"] == result["scan"]

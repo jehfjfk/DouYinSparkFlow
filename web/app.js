@@ -204,11 +204,10 @@ async function refreshAccountLogin(index){
     const deadline=Date.now()+6*60*1000;
     while(loginStatus.running&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,1500));loginStatus=await api("/api/scan-status");}
     if(loginStatus.error)throw new Error(loginStatus.error);
-    if(!loginStatus.stage.includes("登录已更新")){throw requestError||new Error("登录更新未完成");}
-    account.cookieConfigured=true;if(result)account.cookieCount=result.result.cookieCount;renderAccounts();toast("登录状态已更新，正在扫描置顶好友");
-    setScanProgress(0,"登录已更新，开始扫描置顶好友");
-    const scan=await api("/api/scan-pinned",{method:"POST",body:JSON.stringify({accountIndex:index})});
-    state.scan=scan.result;renderScanResults();toast(scan.result.message||"置顶好友扫描完成");
+    const scanResult=result?.result?.scan||loginStatus.scanResult;
+    if(!scanResult){throw requestError||new Error("登录后的置顶好友扫描未完成");}
+    account.cookieConfigured=true;if(result)account.cookieCount=result.result.login.cookieCount;renderAccounts();
+    state.scan=scanResult;renderScanResults();toast(scanResult.message||"登录已更新，置顶好友扫描完成");
   }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
 }
 async function stopRun(){

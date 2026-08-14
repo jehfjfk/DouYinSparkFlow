@@ -23,7 +23,7 @@ LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
-SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None}
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None}
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 
@@ -264,7 +264,7 @@ def sync_github():
     return {"repository": GITHUB_REPOSITORY, "accounts": len(parse_json(env["TASKS"], [])), "secrets": len(active_secrets)}
 
 
-def scan_pinned_account(account_index):
+def scan_pinned_account(account_index, finalize=True):
     """Read-only scan of pinned contacts using the selected account Cookie."""
     from core.browser import get_browser
     from core import tasks as task_core
@@ -338,7 +338,7 @@ def scan_pinned_account(account_index):
                 results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
             except Exception:
                 continue
-        update_scan_status(False, 100, f"扫描完成，识别到 {len(results)} 个置顶会话")
+        update_scan_status(not finalize, 100 if finalize else 98, f"扫描完成，识别到 {len(results)} 个置顶会话")
         return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
     except Exception as exc:
         update_scan_status(False, 100, "扫描失败", str(exc))
@@ -360,7 +360,7 @@ def get_scan_status():
         return dict(SCAN_STATUS)
 
 
-def refresh_account_login(account_id):
+def refresh_account_login(account_id, continue_to_scan=False):
     """Open an interactive Douyin login and persist the resulting Cookie for one account."""
     from core.browser import get_browser
     from core import tasks as task_core
@@ -369,7 +369,7 @@ def refresh_account_login(account_id):
     account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
     if not account:
         raise ValueError("指定账号不存在")
-    update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None)
+    update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None, scanResult=None)
     playwright, browser = get_browser()
     context = browser.new_context(user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN", timezone_id="Asia/Shanghai")
     page = context.new_page()
@@ -490,13 +490,25 @@ def refresh_account_login(account_id):
         github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
             "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
         })
-        update_scan_status(False, 100, "登录已更新，准备扫描置顶好友", loginUrl=None, qrImage=None)
+        update_scan_status(continue_to_scan, 80 if continue_to_scan else 100, "登录已更新，正在启动置顶好友扫描", loginUrl=None, qrImage=None)
         return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
     except Exception as exc:
         update_scan_status(False, get_scan_status()["percent"], "登录更新失败", str(exc), loginUrl=None, qrImage=None)
         raise
     finally:
         context.close(); browser.close(); playwright.stop()
+
+
+def refresh_login_and_scan(account_id):
+    """Finish the selected account's login, Cookie sync, and pinned scan as one recoverable job."""
+    accounts = public_config()["accounts"]
+    account_index = next((index for index, item in enumerate(accounts) if item["uniqueId"] == str(account_id)), None)
+    if account_index is None:
+        raise ValueError("指定账号不存在")
+    login_result = refresh_account_login(account_id, continue_to_scan=True)
+    scan_result = scan_pinned_account(account_index, finalize=False)
+    update_scan_status(False, 100, f"登录已更新并完成置顶好友扫描，识别到 {len(scan_result['contacts'])} 人", loginUrl=None, qrImage=None, scanResult=scan_result)
+    return {"login": login_result, "scan": scan_result}
 
 
 class TaskRunner:
@@ -670,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
             if self.path == "/api/account-login-refresh":
                 payload = self.read_json()
-                return self.json_response({"ok": True, "result": refresh_account_login(payload.get("accountId"))})
+                return self.json_response({"ok": True, "result": refresh_login_and_scan(payload.get("accountId"))})
             if self.path == "/api/run":
                 return self.json_response({"ok": True, "status": RUNNER.start()})
             if self.path == "/api/run-account":
