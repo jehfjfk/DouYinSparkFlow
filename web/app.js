@@ -25,12 +25,24 @@ async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}
 async function manageUsers(){
   try{
     const data=await api("/api/users");
-    $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
+    $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><div><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div><button class="text-button" data-delete-user="'+escapeHtml(user.username)+'" type="button">删除</button></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
+    $$('[data-delete-user]').forEach(button=>button.addEventListener("click",()=>deleteWebsiteUser(button)));
     $("#websiteUsername").value="";$("#websitePassword").value="";$("#userFormError").textContent="";
     $("#userModal").classList.remove("hidden");
   }catch(error){toast(error.message,true);}
 }
 function closeUserManager(){$("#userModal").classList.add("hidden");}
+async function deleteWebsiteUser(button){
+  if(button.dataset.confirming!=="true"){
+    button.dataset.confirming="true";button.textContent="确认删除";button.classList.add("confirm-delete");
+    setTimeout(()=>{if(button.isConnected){button.dataset.confirming="false";button.textContent="删除";button.classList.remove("confirm-delete");}},4000);
+    return;
+  }
+  try{
+    await api("/api/users/delete",{method:"POST",body:JSON.stringify({username:button.dataset.deleteUser})});
+    toast("手机端登录账号已删除");await manageUsers();
+  }catch(error){toast(error.message,true);}
+}
 async function saveWebsiteUser(event){
   event.preventDefault();$("#userFormError").textContent="";
   try{

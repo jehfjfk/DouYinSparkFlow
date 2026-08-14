@@ -248,6 +248,16 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
     assert web_app.authenticate_web_user("member", "wrongpass") is None
 
 
+def test_delete_mobile_user_revokes_sessions_without_deleting_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    web_app.upsert_web_user("member", "password8", account_ids=["mine"])
+    web_app.SESSIONS["member-token"] = {"username": "member", "role": "account", "accountIds": ["mine"], "expires": web_app.time.time() + 60}
+    result = web_app.delete_web_user("member")
+    assert result == {"username": "member"}
+    assert web_app.authenticate_web_user("member", "password8") is None
+    assert "member-token" not in web_app.SESSIONS
+
+
 def test_unbound_mobile_user_claims_one_new_account(tmp_path, monkeypatch, isolated_env):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
     web_app.upsert_web_user("mobile", "password8", account_ids=[])

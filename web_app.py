@@ -159,6 +159,26 @@ def bind_web_user_account(username, account_id):
         os.replace(temporary, WEB_USERS_FILE)
 
 
+def delete_web_user(username):
+    username = str(username or "").strip()
+    with USER_LOCK:
+        data = load_web_users()
+        original_count = len(data["users"])
+        data["users"] = [
+            user for user in data["users"]
+            if not (user["username"] == username and user["role"] == "account")
+        ]
+        if len(data["users"]) == original_count:
+            raise ValueError("手机端登录账号不存在")
+        temporary = WEB_USERS_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, WEB_USERS_FILE)
+    for token, session in list(SESSIONS.items()):
+        if session.get("username") == username:
+            SESSIONS.pop(token, None)
+    return {"username": username}
+
+
 def authenticate_web_user(username, password):
     user = next((item for item in load_web_users()["users"] if item["username"] == str(username)), None)
     if not user:
@@ -958,6 +978,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response({"error": "仅本机主账号可注册网站用户"}, 403)
                 payload = self.read_json()
                 return self.json_response({"ok": True, "user": upsert_web_user(payload.get("username"), payload.get("password"), "account", [])})
+            if self.path == "/api/users/delete":
+                if not self.local_master():
+                    return self.json_response({"error": "仅本机主账号可删除网站用户"}, 403)
+                return self.json_response({"ok": True, "user": delete_web_user(self.read_json().get("username"))})
             if self.path == "/api/config":
                 payload = self.read_json()
                 user = self.current_user()
