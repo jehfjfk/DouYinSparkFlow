@@ -92,6 +92,7 @@ def public_config(allowed_account_ids=None):
         accounts.append({
             "username": task.get("username", ""),
             "uniqueId": unique_id,
+            "messageTemplate": str(task.get("message_template", env.get("MESSAGE_TEMPLATE", "续火花"))).replace("\\n", "\n"),
             "targets": normalize_public_targets(task.get("targets", [])),
             "cookieConfigured": bool(cookies),
             "cookieCount": len(cookies) if isinstance(cookies, list) else 0,
@@ -206,9 +207,10 @@ def save_config(payload):
         username = str(account.get("username", "")).strip()
         unique_id = str(account.get("uniqueId", "")).strip()
         targets = normalize_public_targets(account.get("targets", []))
+        message_template = str(account.get("messageTemplate", payload.get("messageTemplate", "续火花"))).replace("\r\n", "\n")
         if not username or not unique_id:
             raise ValueError("用户名和抖音号不能为空")
-        tasks.append({"username": username, "unique_id": unique_id, "targets": targets})
+        tasks.append({"username": username, "unique_id": unique_id, "message_template": message_template, "targets": targets})
         cookie_raw = account.get("cookies")
         if cookie_raw:
             cookies = validate_cookie_json(cookie_raw)

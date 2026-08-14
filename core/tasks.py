@@ -335,7 +335,7 @@ def scroll_and_select_user(page, username, targets, target_aliases=None):
     ensure_all_targets_found(username, remaining_targets)
 
 
-def do_user_task(browser, username, cookies, targets, target_aliases=None):
+def do_user_task(browser, username, cookies, targets, target_aliases=None, message_template=None):
     global userIDDict
     userIDDict = {}
     context = browser.new_context(
@@ -372,7 +372,7 @@ def do_user_task(browser, username, cookies, targets, target_aliases=None):
             page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
             chat_input = page.locator(chat_input_selector)
 
-            message = build_message()
+            message = build_message(message_template)
             lines = message.split("\\n")
             for index, line in enumerate(lines):
                 chat_input.type(line)
@@ -413,10 +413,11 @@ def runTasks():
             cookies = user["cookies"]
             targets = user["targets"]
             target_aliases = user.get("target_aliases", {})
+            message_template = user.get("message_template", config.get("messageTemplate", "续火花"))
             username = user.get("username", "未知用户")
             logger.info(f"开始处理账号 {username}")
             # 创建任务
-            do_user_task(browser, username, cookies, targets, target_aliases)
+            do_user_task(browser, username, cookies, targets, target_aliases, message_template)
             logger.info(f"账号 {username} 任务完成")
     finally:
         # 关闭浏览器实例

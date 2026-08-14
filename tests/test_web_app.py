@@ -26,12 +26,14 @@ def test_save_multiple_accounts_with_structured_targets(isolated_env):
             {
                 "username": "我",
                 "uniqueId": "mine",
+                "messageTemplate": "我的续火消息",
                 "cookies": cookie_json(),
                 "targets": [{"id": "friend-1", "aliases": ["好友一", "备注一"]}],
             },
             {
                 "username": "朋友",
                 "uniqueId": "theirs",
+                "messageTemplate": "朋友的续火消息",
                 "cookies": cookie_json(),
                 "targets": [{"id": "friend-2", "aliases": ["好友二"]}],
             },
@@ -42,6 +44,8 @@ def test_save_multiple_accounts_with_structured_targets(isolated_env):
     tasks = json.loads(saved["TASKS"])
     assert [task["unique_id"] for task in tasks] == ["mine", "theirs"]
     assert tasks[0]["targets"][0] == {"id": "friend-1", "aliases": ["好友一", "备注一"]}
+    assert [task["message_template"] for task in tasks] == ["我的续火消息", "朋友的续火消息"]
+    assert [account["messageTemplate"] for account in config["accounts"]] == ["我的续火消息", "朋友的续火消息"]
     assert config["accounts"][1]["cookieConfigured"] is True
     assert config["accounts"][1]["cookieCount"] == 1
 
@@ -246,13 +250,15 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
 
 def test_scoped_save_preserves_other_accounts(isolated_env):
     isolated_env.write_text(
-        'TASKS=[{"username":"A","unique_id":"a","targets":[]},{"username":"B","unique_id":"b","targets":[]}]\n',
+        'TASKS=[{"username":"A","unique_id":"a","message_template":"A旧消息","targets":[]},{"username":"B","unique_id":"b","message_template":"B保留消息","targets":[]}]\n',
         encoding="utf-8",
     )
-    web_app.save_scoped_config({"accounts": [{"username": "A2", "uniqueId": "a", "targets": [{"id": "friend"}]}]}, ["a"])
+    web_app.save_scoped_config({"accounts": [{"username": "A2", "uniqueId": "a", "messageTemplate": "A新消息", "targets": [{"id": "friend"}]}]}, ["a"])
     tasks = json.loads(web_app.read_env()["TASKS"])
     assert [task["unique_id"] for task in tasks] == ["a", "b"]
     assert tasks[1]["username"] == "B"
+    assert tasks[0]["message_template"] == "A新消息"
+    assert tasks[1]["message_template"] == "B保留消息"
 
 
 def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):

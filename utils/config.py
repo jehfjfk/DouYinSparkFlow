@@ -142,6 +142,7 @@ def get_userData():
             {
                 "unique_id": unique_id,
                 "username": username,
+                "message_template": task.get("message_template", get_config().get("messageTemplate", "续火花")),
                 "cookies": sanitize_cookies(cookies),
                 "targets": targets,
                 "target_aliases": target_aliases,

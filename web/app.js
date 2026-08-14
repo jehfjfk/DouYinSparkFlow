@@ -47,6 +47,7 @@ function accountMarkup(account,index){
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
+    '<label class="field full"><span>该账号发送内容</span><textarea data-field="messageTemplate" rows="4" placeholder="输入该账号每天发送的消息">'+escapeHtml(account.messageTemplate||state.config.messageTemplate)+'</textarea><small class="field-help">使用 [API] 插入每日一言，仅对当前账号生效。</small></label>'+
     '<div class="field full"><span>目标好友 / 群聊</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号或群聊名称"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+targetToggle+'</div></div>'+
     '<div class="field full"><span>Cookie JSON</span><div class="cookie-row"><textarea data-field="cookies" placeholder="已有 Cookie 不会回显。仅在需要更新时粘贴新的 JSON。"></textarea><div class="cookie-badge"><strong>'+(account.cookieCount||0)+'</strong><span>'+(account.cookieConfigured?"已安全保存":"等待导入")+'</span></div></div></div>'+
     '</div></article>';
@@ -105,7 +106,8 @@ function renderOverview(){
   $("#metricTargets").textContent=targetCount;
   $("#metricCookies").textContent=ready+"/"+accounts.length;
   $("#cookieHint").textContent=ready===accounts.length?"全部账号可用":"存在未配置账号";
-  $("#overviewMessage").textContent=state.config.messageTemplate;
+  const accountMessages=[...new Set(accounts.map(account=>account.messageTemplate||state.config.messageTemplate))];
+  $("#overviewMessage").textContent=accountMessages.length===1?accountMessages[0]:"各账号已配置独立发送内容";
   const targets=accounts.flatMap(a=>a.targets);
   if(targets.length<=8){state.overviewTargetsExpanded=false;localStorage.removeItem("overviewTargetsExpanded");}
   const visibleTargets=state.overviewTargetsExpanded?targets:targets.slice(0,8);
@@ -145,21 +147,21 @@ function collectConfig(){
   config.messageTemplate=$("#messageTemplate").value;
   return config;
 }
-async function saveConfig(){
+async function saveConfig(notify=true){
   try{
     const result=await api("/api/config",{method:"POST",body:JSON.stringify(collectConfig())});
-    state.config=result.config;clearScanResults();renderAll();toast("配置已保存");
+    state.config=result.config;clearScanResults();renderAll();if(notify)toast("配置已保存");
   }catch(error){toast(error.message,true);throw error;}
 }
 async function syncGithub(){
   const button=$("#syncButton");
   try{
-    button.disabled=true;button.textContent="正在同步...";
-    await saveConfig();
+    button.disabled=true;button.textContent="正在保存并同步...";
+    await saveConfig(false);
     const result=await api("/api/github/sync",{method:"POST",body:"{}"});
     const deleted=result.result.deletedSecrets.length;
-    toast("已同步 "+result.result.accounts+" 个账号到 GitHub"+(deleted?"，删除 "+deleted+" 个旧账号凭证":""));
-  }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="同步到 GitHub";}
+    toast("本机与 GitHub 已生效，共 "+result.result.accounts+" 个账号"+(deleted?"，删除 "+deleted+" 个旧账号凭证":""));
+  }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="保存并同步";}
 }
 async function scanPinned(){
   if(!state.config.accounts.length){toast("请先添加并保存一个账号",true);return;}
@@ -266,7 +268,6 @@ function bindStaticEvents(){
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
-  $("#saveButton").addEventListener("click",saveConfig);
   $("#syncButton").addEventListener("click",syncGithub);
   $("#openCreator").addEventListener("click",()=>window.open("https://creator.douyin.com/", "_blank", "noopener"));
   $("#scanPinned").addEventListener("click",scanPinned);
@@ -282,7 +283,7 @@ function bindStaticEvents(){
   $("#cancelRun").addEventListener("click",()=>$("#confirmModal").classList.add("hidden"));
   $("#confirmRun").addEventListener("click",startRun);
   $("#refreshLogs").addEventListener("click",loadLogs);
-  $("#addAccount").addEventListener("click",()=>{clearScanResults();state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
+  $("#addAccount").addEventListener("click",()=>{clearScanResults();state.config.accounts.push({username:"",uniqueId:"",messageTemplate:state.config.messageTemplate,targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
 }
 async function initAuthenticated(){
   const sessionResponse=await fetch("/api/session");

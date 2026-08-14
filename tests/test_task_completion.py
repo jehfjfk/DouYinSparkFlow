@@ -27,6 +27,15 @@ class TaskCompletionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "COOKIES_OLD"):
                 config_module.get_userData()
         config_module.userData = None
+
+    def test_each_account_keeps_its_own_message_template(self):
+        tasks = '[{"username":"first","unique_id":"first","message_template":"消息一","targets":[]},{"username":"second","unique_id":"second","message_template":"消息二","targets":[]}]'
+        with patch.dict(os.environ, {"TASKS": tasks, "COOKIES_FIRST": "[]", "COOKIES_SECOND": "[]", "RUN_ACCOUNT_ID": ""}, clear=False):
+            config_module.userData = None
+            users = config_module.get_userData()
+            self.assertEqual([user["message_template"] for user in users], ["消息一", "消息二"])
+        config_module.userData = None
+
     def test_all_targets_found_succeeds(self):
         ensure_all_targets_found("account", set())
 
