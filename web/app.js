@@ -172,8 +172,8 @@ function importScanned(){
   if(!state.scan)return;
   const index=state.scan.accountIndex;
   if(index<0||!state.config.accounts[index])return;
-  const selected=$$("[data-scan-index]:checked").map(input=>state.scan.contacts[Number(input.dataset.scanIndex)]).filter(item=>item.uniqueId||item.shortId);
-  selected.forEach(item=>{const id=item.uniqueId||item.shortId;const aliases=[item.nickname,item.remark].filter(Boolean);if(!state.config.accounts[index].targets.some(target=>target.id===id))state.config.accounts[index].targets.push({id,aliases});});
+  const selected=$$("[data-scan-index]:checked").map(input=>state.scan.contacts[Number(input.dataset.scanIndex)]).filter(item=>item.uniqueId||item.shortId||item.nickname||item.remark);
+  selected.forEach(item=>{const id=item.uniqueId||item.shortId||item.nickname||item.remark;const aliases=[item.nickname,item.remark].filter(Boolean);if(!state.config.accounts[index].targets.some(target=>target.id===id))state.config.accounts[index].targets.push({id,aliases});});
   renderAccounts();clearScanResults();toast("已加入账号 "+(index+1)+" 的 "+selected.length+" 个好友，请保存配置");
 }
 async function requestRun(){try{await saveConfig();$("#confirmModal").classList.remove("hidden");}catch(_error){}}

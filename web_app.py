@@ -334,8 +334,18 @@ def scan_pinned_account(account_index, finalize=True):
                 if not title or not is_pinned_item(item):
                     continue
                 item.click()
-                page.wait_for_timeout(250)
-                identity = task_core.userIDDict.get(title, [])
+                identity = []
+                identity_deadline = time.monotonic() + 2
+                while time.monotonic() < identity_deadline:
+                    identity = task_core.userIDDict.get(title, [])
+                    if not identity:
+                        identity = next(
+                            (values for name, values in task_core.userIDDict.items() if task_core.norm(name) == task_core.norm(title)),
+                            [],
+                        )
+                    if identity:
+                        break
+                    page.wait_for_timeout(200)
                 results.append({"nickname": title, "remark": identity[4] if len(identity) > 4 else title, "shortId": identity[0] if identity else "", "uniqueId": identity[1] if len(identity) > 1 else "", "pinned": True})
             except Exception:
                 continue
