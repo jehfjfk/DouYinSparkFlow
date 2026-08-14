@@ -777,11 +777,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
         return
 
+    def is_local_request(self):
+        forwarded = self.headers.get("CF-Connecting-IP") or self.headers.get("X-Forwarded-For")
+        return self.client_address[0] in {"127.0.0.1", "::1"} and not forwarded
+
     def current_user(self):
+        if self.is_local_request():
+            return {"username": "local-master", "role": "master", "accountIds": [], "expires": float("inf")}
         cookie = self.headers.get("Cookie", "")
         token = next((part.strip().split("=", 1)[1] for part in cookie.split(";") if part.strip().startswith("sparkflow_session=")), "")
         session = SESSIONS.get(token)
-        if session and session["expires"] > time.time():
+        if session and session["expires"] > time.time() and session["role"] != "master":
             return session
         if token:
             SESSIONS.pop(token, None)
@@ -792,9 +798,8 @@ class Handler(BaseHTTPRequestHandler):
         return None if user and user["role"] == "master" else list(user.get("accountIds", [])) if user else []
 
     def local_master(self):
-        forwarded = self.headers.get("CF-Connecting-IP") or self.headers.get("X-Forwarded-For")
         user = self.current_user()
-        return bool(user and user["role"] == "master" and self.client_address[0] in {"127.0.0.1", "::1"} and not forwarded)
+        return bool(user and user["role"] == "master" and self.is_local_request())
 
     def require_authentication(self):
         if self.current_user():
@@ -825,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
             user = self.current_user()
             if not user:
                 return self.json_response({"authenticated": False}, 401)
-            return self.json_response({"authenticated": True, "username": user["username"], "role": user["role"], "accountIds": user.get("accountIds", []), "canRegister": self.local_master()})
+            return self.json_response({"authenticated": True, "username": user["username"], "role": user["role"], "accountIds": user.get("accountIds", []), "canRegister": self.local_master(), "localAutoLogin": self.local_master()})
         if self.require_authentication():
             return
         if parsed.path == "/api/config":
@@ -845,7 +850,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/users":
             if not self.local_master():
                 return self.json_response({"error": "仅本机主账号可管理网站用户"}, 403)
-            return self.json_response({"users": [{"username": item["username"], "role": item["role"], "accountIds": item.get("accountIds", [])} for item in load_web_users()["users"]]})
+            return self.json_response({"users": [{"username": item["username"], "role": item["role"], "accountIds": item.get("accountIds", [])} for item in load_web_users()["users"] if item["role"] == "account"]})
         if parsed.path == "/api/logs":
             if self.allowed_account_ids() is not None:
                 return self.json_response({"entries": []})
@@ -858,7 +863,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json()
                 user = authenticate_web_user(payload.get("username"), payload.get("password"))
-                if not user:
+                if not user or user["role"] != "account":
                     return self.json_response({"error": "网站账号或密码错误"}, 401)
                 token = create_session(user)
                 body = json.dumps({"ok": True, "username": user["username"], "role": user["role"]}, ensure_ascii=False).encode("utf-8")

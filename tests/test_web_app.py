@@ -137,9 +137,36 @@ def test_dashboard_uses_expiring_session_cookie(monkeypatch):
     token = "test-session"
     web_app.SESSIONS[token] = {"username": "member", "role": "account", "accountIds": ["mine"], "expires": web_app.time.time() + 60}
     handler.headers = {"Cookie": f"sparkflow_session={token}"}
+    handler.client_address = ("192.168.1.20", 12345)
     assert handler.current_user()["username"] == "member"
     assert handler.allowed_account_ids() == ["mine"]
     web_app.SESSIONS.pop(token, None)
+
+
+def test_loopback_request_automatically_gets_master_access():
+    handler = object.__new__(web_app.Handler)
+    handler.headers = {}
+    handler.client_address = ("127.0.0.1", 12345)
+    assert handler.current_user()["role"] == "master"
+    assert handler.allowed_account_ids() is None
+    assert handler.local_master() is True
+
+
+def test_forwarded_or_remote_request_never_uses_master_session():
+    token = "master-session"
+    web_app.SESSIONS[token] = {"username": "admin", "role": "master", "accountIds": [], "expires": web_app.time.time() + 60}
+    try:
+        for address, headers in [
+            ("192.168.1.20", {"Cookie": f"sparkflow_session={token}"}),
+            ("127.0.0.1", {"Cookie": f"sparkflow_session={token}", "CF-Connecting-IP": "203.0.113.9"}),
+        ]:
+            handler = object.__new__(web_app.Handler)
+            handler.client_address = (address, 12345)
+            handler.headers = headers
+            assert handler.current_user() is None
+            assert handler.local_master() is False
+    finally:
+        web_app.SESSIONS.pop(token, None)
 
 
 def test_password_hash_round_trip(tmp_path, monkeypatch):
