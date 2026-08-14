@@ -1,4 +1,4 @@
-const state={config:null,status:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null};
+const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null};
 const titles={overview:["运行概览","检查账号状态并启动今日任务"],accounts:["账号与好友","管理登录凭证和发送范围"],message:["消息设置","编辑每天发送的消息内容"],runtime:["运行控制","调整参数并管理任务进程"],logs:["运行日志","查看任务执行详情和异常"]};
 const hitokotoOptions=["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"];
 const $=selector=>document.querySelector(selector);
@@ -17,6 +17,11 @@ function toast(message,error=false){
   $("#toastRegion").append(node);
   setTimeout(()=>node.remove(),3600);
 }
+function showLogin(message=""){$("#appShell").classList.add("hidden");$("#loginScreen").classList.remove("hidden");$("#loginError").textContent=message;}
+function showApp(){$("#loginScreen").classList.add("hidden");$("#appShell").classList.remove("hidden");document.body.classList.toggle("restricted-user",state.session.role!=="master");$("#manageUsers").classList.toggle("hidden",!state.session.canRegister);}
+async function login(event){event.preventDefault();$("#loginError").textContent="";try{await api("/api/auth/login",{method:"POST",body:JSON.stringify({username:$("#loginUsername").value,password:$("#loginPassword").value})});await initAuthenticated();}catch(error){showLogin(error.message);}}
+async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}"});}finally{location.reload();}}
+async function manageUsers(){const accountId=prompt("绑定的抖音号\n"+state.config.accounts.map(account=>account.uniqueId+"  "+account.username).join("\n"));if(!accountId)return;if(!state.config.accounts.some(account=>account.uniqueId===accountId)){toast("抖音号不存在",true);return;}const username=prompt("网站登录账号");if(!username)return;const password=prompt("网站登录密码（至少 8 位）");if(!password)return;try{await api("/api/users",{method:"POST",body:JSON.stringify({username,password,accountIds:[accountId]})});toast("网站用户已保存");}catch(error){toast(error.message,true);}}
 function escapeHtml(value){
   return String(value).replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 }
@@ -229,6 +234,9 @@ async function loadLogs(){
 }
 function renderAll(){renderAccounts();renderMessage();renderRuntimeForm();renderOverview();renderStatus();}
 function bindStaticEvents(){
+  $("#loginForm").addEventListener("submit",login);
+  $("#logoutButton").addEventListener("click",logout);
+  $("#manageUsers").addEventListener("click",manageUsers);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));
   $$("[data-jump]").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.jump)));
   $("#menuButton").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
@@ -250,8 +258,10 @@ function bindStaticEvents(){
   $("#refreshLogs").addEventListener("click",loadLogs);
   $("#addAccount").addEventListener("click",()=>{clearScanResults();state.config.accounts.push({username:"",uniqueId:"",targets:[],cookieConfigured:false,cookieCount:0});renderAccounts();switchView("accounts");});
 }
-async function init(){
-  bindStaticEvents();
+async function initAuthenticated(){
+  const sessionResponse=await fetch("/api/session");
+  if(!sessionResponse.ok){showLogin();return;}
+  state.session=await sessionResponse.json();showApp();
   $("#todayDate").textContent=new Date().toLocaleDateString("zh-CN",{month:"long",day:"numeric",weekday:"short"});
   try{
     const results=await Promise.all([api("/api/config"),api("/api/status")]);
@@ -260,4 +270,5 @@ async function init(){
     state.logTimer=setInterval(()=>{if(state.view==="logs"||state.view==="overview")loadLogs();},5000);
   }catch(error){toast(error.message,true);}
 }
+async function init(){bindStaticEvents();await initAuthenticated();}
 init();

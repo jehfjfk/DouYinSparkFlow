@@ -132,13 +132,32 @@ def test_login_refresh_updates_only_selected_cookie_secret():
     assert 'f"COOKIES_{account_id.upper()}"' in source
 
 
-def test_dashboard_requires_password_when_configured(isolated_env):
-    isolated_env.write_text("WEB_ACCESS_PASSWORD=secret\n", encoding="utf-8")
+def test_dashboard_uses_expiring_session_cookie(monkeypatch):
     handler = object.__new__(web_app.Handler)
-    handler.headers = {"Authorization": "Basic c3BhcmtmbG93OnNlY3JldA=="}
-    assert handler.authenticated() is True
-    handler.headers = {"Authorization": "Basic c3BhcmtmbG93Ondyb25n"}
-    assert handler.authenticated() is False
+    token = "test-session"
+    web_app.SESSIONS[token] = {"username": "member", "role": "account", "accountIds": ["mine"], "expires": web_app.time.time() + 60}
+    handler.headers = {"Cookie": f"sparkflow_session={token}"}
+    assert handler.current_user()["username"] == "member"
+    assert handler.allowed_account_ids() == ["mine"]
+    web_app.SESSIONS.pop(token, None)
+
+
+def test_password_hash_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    web_app.upsert_web_user("member", "password8", account_ids=["mine"])
+    assert web_app.authenticate_web_user("member", "password8")["accountIds"] == ["mine"]
+    assert web_app.authenticate_web_user("member", "wrongpass") is None
+
+
+def test_scoped_save_preserves_other_accounts(isolated_env):
+    isolated_env.write_text(
+        'TASKS=[{"username":"A","unique_id":"a","targets":[]},{"username":"B","unique_id":"b","targets":[]}]\n',
+        encoding="utf-8",
+    )
+    web_app.save_scoped_config({"accounts": [{"username": "A2", "uniqueId": "a", "targets": [{"id": "friend"}]}]}, ["a"])
+    tasks = json.loads(web_app.read_env()["TASKS"])
+    assert [task["unique_id"] for task in tasks] == ["a", "b"]
+    assert tasks[1]["username"] == "B"
 
 
 def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):

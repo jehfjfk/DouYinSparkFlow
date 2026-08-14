@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -9,6 +10,7 @@ import urllib.error
 import urllib.request
 import base64
 import re
+import secrets
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,12 +21,15 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 ENV_FILE = ROOT / ".env"
+WEB_USERS_FILE = ROOT / ".web-users.json"
 LOG_FILE = ROOT / "logs" / "app.log"
 RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
 LOGIN_LOCK = threading.Lock()
-SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None}
+USER_LOCK = threading.Lock()
+SESSIONS = {}
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 
@@ -70,12 +75,15 @@ def parse_json(value, fallback):
         return fallback
 
 
-def public_config():
+def public_config(allowed_account_ids=None):
     env = read_env()
     tasks = parse_json(env.get("TASKS", "[]"), [])
     accounts = []
+    allowed = set(allowed_account_ids) if allowed_account_ids is not None else None
     for task in tasks:
         unique_id = str(task.get("unique_id", ""))
+        if allowed is not None and unique_id not in allowed:
+            continue
         cookie_key = f"COOKIES_{unique_id.upper()}"
         cookies = parse_json(env.get(cookie_key, "[]"), [])
         accounts.append({
@@ -97,6 +105,54 @@ def public_config():
         "accounts": accounts,
         "github": {"repository": GITHUB_REPOSITORY, "environment": GITHUB_ENVIRONMENT},
     }
+
+
+def password_record(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 200_000).hex()
+    return {"salt": salt, "hash": digest}
+
+
+def load_web_users():
+    if not WEB_USERS_FILE.exists():
+        return {"users": []}
+    return json.loads(WEB_USERS_FILE.read_text(encoding="utf-8"))
+
+
+def save_web_users(data):
+    with USER_LOCK:
+        temporary = WEB_USERS_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, WEB_USERS_FILE)
+
+
+def upsert_web_user(username, password, role="account", account_ids=None):
+    username = str(username or "").strip()
+    if not username or len(password or "") < 8:
+        raise ValueError("网站账号不能为空，密码至少 8 位")
+    data = load_web_users()
+    user = next((item for item in data["users"] if item["username"] == username), None)
+    record = {"username": username, "role": role, "accountIds": list(account_ids or []), **password_record(password)}
+    if user:
+        user.update(record)
+    else:
+        data["users"].append(record)
+    save_web_users(data)
+    return {"username": username, "role": role, "accountIds": record["accountIds"]}
+
+
+def authenticate_web_user(username, password):
+    user = next((item for item in load_web_users()["users"] if item["username"] == str(username)), None)
+    if not user:
+        return None
+    expected = password_record(str(password), user["salt"])["hash"]
+    return user if hmac.compare_digest(expected, user["hash"]) else None
+
+
+def create_session(user):
+    token = secrets.token_urlsafe(32)
+    SESSIONS[token] = {"username": user["username"], "role": user["role"], "accountIds": user.get("accountIds", []), "expires": time.time() + 86400}
+    return token
 
 
 def normalize_public_targets(targets):
@@ -157,6 +213,29 @@ def save_config(payload):
     updates["TASKS"] = json.dumps(tasks, ensure_ascii=False, separators=(",", ":"))
     write_env(updates)
     return public_config()
+
+
+def save_scoped_config(payload, allowed_account_ids=None):
+    if allowed_account_ids is None:
+        return save_config(payload)
+    allowed = set(allowed_account_ids)
+    submitted = payload.get("accounts", [])
+    if not submitted or any(str(account.get("uniqueId", "")) not in allowed for account in submitted):
+        raise ValueError("账号配置超出当前用户的访问范围")
+    current = public_config()
+    replacements = {str(account["uniqueId"]): account for account in submitted}
+    merged_accounts = []
+    for account in current["accounts"]:
+        merged_accounts.append(replacements.get(account["uniqueId"], account))
+    scoped_payload = {
+        "accounts": merged_accounts,
+        "messageTemplate": current["messageTemplate"], "hitokotoTypes": current["hitokotoTypes"],
+        "matchMode": current["matchMode"], "browserTimeout": current["browserTimeout"],
+        "friendListWaitTime": current["friendListWaitTime"], "taskRetryTimes": current["taskRetryTimes"],
+        "scheduleTime": current["scheduleTime"], "logLevel": current["logLevel"],
+    }
+    save_config(scoped_payload)
+    return public_config(allowed)
 
 
 def validate_schedule_time(value):
@@ -225,7 +304,7 @@ def encrypted_secret(value, public_key):
     return base64.b64encode(encrypted).decode("ascii")
 
 
-def sync_github():
+def sync_github(allowed_account_ids=None):
     config = public_config()
     if not config["accounts"]:
         raise ValueError("请先保存至少一个账号")
@@ -238,7 +317,7 @@ def sync_github():
     local_tasks = parse_json(env.get("TASKS", "[]"), [])
     remote_tasks = parse_json(remote_values.get("TASKS", "[]"), [])
     env["TASKS"] = json.dumps(merge_tasks(remote_tasks, local_tasks), ensure_ascii=False, separators=(",", ":"))
-    variable_names = ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
+    variable_names = ["TASKS"] if allowed_account_ids is not None else ["TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE", "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES", "LOG_LEVEL", "PROXY_ADDRESS"]
     for name in variable_names:
         value = env.get(name, "")
         # GitHub Environment Variables reject empty values. An absent optional value
@@ -254,7 +333,10 @@ def sync_github():
 
     key_info = github_request("GET", f"{base}/secrets/public-key", token)
     active_secrets = set()
+    allowed = set(allowed_account_ids) if allowed_account_ids is not None else None
     for account in config["accounts"]:
+        if allowed is not None and account["uniqueId"] not in allowed:
+            continue
         name = f"COOKIES_{account['uniqueId'].upper()}"
         value = env.get(name)
         if not value:
@@ -271,12 +353,12 @@ def scan_pinned_account(account_index, finalize=True):
     from core import tasks as task_core
     from utils.config import sanitize_cookies
 
-    update_scan_status(True, 5, "正在读取账号配置", loginUrl=None, qrImage=None, scanResult=None)
     config = public_config()
     try:
         account = config["accounts"][int(account_index)]
     except (IndexError, TypeError, ValueError) as exc:
         raise ValueError("账号不存在") from exc
+    update_scan_status(True, 5, "正在读取账号配置", loginUrl=None, qrImage=None, scanResult=None, ownerAccountId=account["uniqueId"])
     cookies = parse_json(read_env().get(f"COOKIES_{account['uniqueId'].upper()}", "[]"), [])
     if not cookies:
         raise ValueError(f"账号 {account['username']} 尚未配置 Cookie")
@@ -395,7 +477,7 @@ def scan_pinned_account(account_index, finalize=True):
             if stable_rounds >= 3:
                 break
         update_scan_status(not finalize, 100 if finalize else 98, f"扫描完成，识别到 {len(results)} 个置顶会话")
-        return {"accountIndex": int(account_index), "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
+        return {"accountIndex": int(account_index), "accountId": account["uniqueId"], "account": account["username"], "contacts": results, "readOnly": True, "message": f"仅识别到 {len(results)} 个置顶会话"}
     except Exception as exc:
         update_scan_status(False, 100, "扫描失败", str(exc))
         raise
@@ -430,7 +512,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
     account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
     if not account:
         raise ValueError("指定账号不存在")
-    update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None, scanResult=None)
+    update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None, scanResult=None, ownerAccountId=account_id)
     playwright, browser = get_browser()
     context = browser.new_context(user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN", timezone_id="Asia/Shanghai")
     page = context.new_page()
@@ -695,25 +777,29 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
         return
 
-    def authenticated(self):
-        password = read_env().get("WEB_ACCESS_PASSWORD", "").strip()
-        if not password:
-            return True
-        supplied = self.headers.get("Authorization", "")
-        expected = base64.b64encode(f"sparkflow:{password}".encode("utf-8")).decode("ascii")
-        return supplied.startswith("Basic ") and hmac.compare_digest(supplied[6:], expected)
+    def current_user(self):
+        cookie = self.headers.get("Cookie", "")
+        token = next((part.strip().split("=", 1)[1] for part in cookie.split(";") if part.strip().startswith("sparkflow_session=")), "")
+        session = SESSIONS.get(token)
+        if session and session["expires"] > time.time():
+            return session
+        if token:
+            SESSIONS.pop(token, None)
+        return None
+
+    def allowed_account_ids(self):
+        user = self.current_user()
+        return None if user and user["role"] == "master" else list(user.get("accountIds", [])) if user else []
+
+    def local_master(self):
+        forwarded = self.headers.get("CF-Connecting-IP") or self.headers.get("X-Forwarded-For")
+        user = self.current_user()
+        return bool(user and user["role"] == "master" and self.client_address[0] in {"127.0.0.1", "::1"} and not forwarded)
 
     def require_authentication(self):
-        if self.authenticated():
+        if self.current_user():
             return False
-        body = "需要输入网站访问账号和密码".encode("utf-8")
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="DouYin Spark Flow", charset="UTF-8"')
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        self.json_response({"error": "请先登录网站"}, 401)
         return True
 
     def json_response(self, data, status=200):
@@ -732,43 +818,114 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_GET(self):
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/"):
+            return self.serve_static(parsed.path)
+        if parsed.path == "/api/session":
+            user = self.current_user()
+            if not user:
+                return self.json_response({"authenticated": False}, 401)
+            return self.json_response({"authenticated": True, "username": user["username"], "role": user["role"], "accountIds": user.get("accountIds", []), "canRegister": self.local_master()})
         if self.require_authentication():
             return
-        parsed = urlparse(self.path)
         if parsed.path == "/api/config":
-            return self.json_response(public_config())
+            return self.json_response(public_config(self.allowed_account_ids()))
         if parsed.path == "/api/status":
             return self.json_response(RUNNER.status())
         if parsed.path == "/api/scan-status":
-            return self.json_response(get_scan_status())
+            status = get_scan_status()
+            allowed = self.allowed_account_ids()
+            if allowed is not None and status.get("ownerAccountId") not in set(allowed):
+                status = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
+            elif status.get("scanResult"):
+                visible = public_config(allowed)["accounts"]
+                status["scanResult"] = dict(status["scanResult"])
+                status["scanResult"]["accountIndex"] = next((i for i, account in enumerate(visible) if account["uniqueId"] == status["scanResult"].get("accountId")), 0)
+            return self.json_response(status)
+        if parsed.path == "/api/users":
+            if not self.local_master():
+                return self.json_response({"error": "仅本机主账号可管理网站用户"}, 403)
+            return self.json_response({"users": [{"username": item["username"], "role": item["role"], "accountIds": item.get("accountIds", [])} for item in load_web_users()["users"]]})
         if parsed.path == "/api/logs":
+            if self.allowed_account_ids() is not None:
+                return self.json_response({"entries": []})
             limit = min(1000, max(20, int(parse_qs(parsed.query).get("limit", ["200"])[0])))
             return self.json_response({"entries": tail_logs(limit)})
-        return self.serve_static(parsed.path)
+        return self.json_response({"error": "接口不存在"}, 404)
 
     def do_POST(self):
+        if self.path == "/api/auth/login":
+            try:
+                payload = self.read_json()
+                user = authenticate_web_user(payload.get("username"), payload.get("password"))
+                if not user:
+                    return self.json_response({"error": "网站账号或密码错误"}, 401)
+                token = create_session(user)
+                body = json.dumps({"ok": True, "username": user["username"], "role": user["role"]}, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Set-Cookie", f"sparkflow_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers(); self.wfile.write(body); return
+            except Exception as exc:
+                return self.json_response({"error": str(exc)}, 400)
         if self.require_authentication():
             return
         try:
+            if self.path == "/api/auth/logout":
+                body = b'{"ok":true}'
+                self.send_response(200); self.send_header("Content-Type", "application/json")
+                self.send_header("Set-Cookie", "sparkflow_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+                self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+            if self.path == "/api/users":
+                if not self.local_master():
+                    return self.json_response({"error": "仅本机主账号可注册网站用户"}, 403)
+                payload = self.read_json()
+                return self.json_response({"ok": True, "user": upsert_web_user(payload.get("username"), payload.get("password"), "account", payload.get("accountIds", []))})
             if self.path == "/api/config":
-                return self.json_response({"ok": True, "config": save_config(self.read_json())})
+                return self.json_response({"ok": True, "config": save_scoped_config(self.read_json(), self.allowed_account_ids())})
             if self.path == "/api/github/sync":
-                return self.json_response({"ok": True, "result": sync_github()})
+                return self.json_response({"ok": True, "result": sync_github(self.allowed_account_ids())})
             if self.path == "/api/scan-pinned":
                 payload = self.read_json()
-                return self.json_response({"ok": True, "result": scan_pinned_account(payload.get("accountIndex"))})
+                visible = public_config(self.allowed_account_ids())["accounts"]
+                account_id = str(payload.get("accountId") or visible[int(payload.get("accountIndex"))]["uniqueId"])
+                allowed = self.allowed_account_ids()
+                if allowed is not None and account_id not in allowed:
+                    return self.json_response({"error": "无权扫描该账号"}, 403)
+                full = public_config()["accounts"]
+                index = next(i for i, account in enumerate(full) if account["uniqueId"] == account_id)
+                result = scan_pinned_account(index)
+                result["accountIndex"] = next(i for i, account in enumerate(visible) if account["uniqueId"] == account_id)
+                return self.json_response({"ok": True, "result": result})
             if self.path == "/api/scan-result/clear":
+                status = get_scan_status(); allowed = self.allowed_account_ids()
+                if allowed is not None and status.get("ownerAccountId") not in allowed:
+                    return self.json_response({"error": "无权清除该账号扫描结果"}, 403)
                 clear_scan_result()
                 return self.json_response({"ok": True})
             if self.path == "/api/account-login-refresh":
                 payload = self.read_json()
-                return self.json_response({"ok": True, "result": refresh_login_and_scan(payload.get("accountId"))})
+                account_id = str(payload.get("accountId", ""))
+                allowed = self.allowed_account_ids()
+                if allowed is not None and account_id not in allowed:
+                    return self.json_response({"error": "无权更新该账号登录"}, 403)
+                return self.json_response({"ok": True, "result": refresh_login_and_scan(account_id)})
             if self.path == "/api/run":
+                if self.allowed_account_ids() is not None:
+                    return self.json_response({"error": "独立账号只能运行自己的账号"}, 403)
                 return self.json_response({"ok": True, "status": RUNNER.start()})
             if self.path == "/api/run-account":
                 payload = self.read_json()
-                return self.json_response({"ok": True, "status": RUNNER.start(str(payload.get("accountId", "")).strip())})
+                account_id = str(payload.get("accountId", "")).strip()
+                allowed = self.allowed_account_ids()
+                if allowed is not None and account_id not in allowed:
+                    return self.json_response({"error": "无权运行该账号"}, 403)
+                return self.json_response({"ok": True, "status": RUNNER.start(account_id)})
             if self.path == "/api/stop":
+                if self.allowed_account_ids() is not None:
+                    return self.json_response({"error": "独立账号无权停止全局任务"}, 403)
                 return self.json_response({"ok": True, "status": RUNNER.stop()})
             self.json_response({"error": "接口不存在"}, 404)
         except (ValueError, json.JSONDecodeError) as exc:

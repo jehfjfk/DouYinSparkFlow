@@ -7,7 +7,10 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="app-shell">
+  <section class="login-screen" id="loginScreen">
+    <form class="login-box" id="loginForm"><div class="brand login-brand"><div class="brand-mark"><span></span><i></i></div><div><strong>Spark Flow</strong><small>抖音续火花</small></div></div><h1>登录网站</h1><label><span>账号</span><input id="loginUsername" autocomplete="username" required></label><label><span>密码</span><input id="loginPassword" type="password" autocomplete="current-password" required></label><button class="button primary wide" type="submit">登录</button><p id="loginError"></p></form>
+  </section>
+  <div class="app-shell hidden" id="appShell">
     <aside class="sidebar" id="sidebar">
       <div class="brand"><div class="brand-mark"><span></span><i></i></div><div><strong>Spark Flow</strong><small>抖音续火花</small></div></div>
       <nav aria-label="主导航">
@@ -24,7 +27,7 @@
       <header class="topbar">
         <button class="icon-button menu-button" id="menuButton" title="打开导航">☰</button>
         <div><h1 id="pageTitle">运行概览</h1><p id="pageSubtitle">检查账号状态并启动今日任务</p></div>
-        <div class="top-actions"><span class="status-pill" id="statusPill"><i></i><span>正在检查</span></span><button class="button secondary" id="saveButton">保存到本机</button><button class="button primary" id="syncButton">同步到 GitHub</button></div>
+        <div class="top-actions"><span class="status-pill" id="statusPill"><i></i><span>正在检查</span></span><button class="button secondary hidden" id="manageUsers">网站用户</button><button class="button secondary" id="saveButton">保存到本机</button><button class="button primary" id="syncButton">同步到 GitHub</button><button class="icon-button" id="logoutButton" title="退出登录">↪</button></div>
       </header>
       <div class="content">
         <section class="view active" data-view-panel="overview">
