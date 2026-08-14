@@ -375,11 +375,16 @@ def refresh_account_login(account_id):
     try:
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         try:
-            page.get_by_text("创作者登录", exact=True).click()
+            login_buttons = page.get_by_text("创作者登录", exact=True).all()
+            visible_button = next((button for button in reversed(login_buttons) if button.is_visible()), None)
+            if visible_button:
+                visible_button.click()
             page.wait_for_timeout(1800)
         except Exception:
             pass
-        qr_image = page.locator("#douyin_login_comp_scan_code img").last.get_attribute("src")
+        qr_locator = page.locator("#douyin_login_comp_scan_code img").last
+        qr_locator.wait_for(state="visible", timeout=15000)
+        qr_image = qr_locator.get_attribute("src")
         login_url = None
         if qr_image and qr_image.startswith("data:image"):
             try:
