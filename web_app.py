@@ -441,8 +441,13 @@ def refresh_account_login(account_id):
                     if qr_image.startswith("blob:"):
                         qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
                     update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
-                login_text = page.locator("[class*='login-card-double']").first.inner_text(timeout=1000)
-                if "扫码成功" in login_text or "确认登录" in login_text:
+                login_text = page.locator("body").inner_text(timeout=1000)
+                identity_verification = "身份验证" in login_text and any(
+                    label in login_text for label in ("接收短信验证码", "手机刷脸验证", "验证登录密码")
+                )
+                if identity_verification:
+                    update_scan_status(True, 35, "已扫码：请在电脑身份验证弹窗中选择短信、刷脸或密码", qrImage=None)
+                elif "扫码成功" in login_text or "确认登录" in login_text:
                     update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
             except Exception:
                 pass
