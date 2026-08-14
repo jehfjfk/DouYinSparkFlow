@@ -157,7 +157,7 @@ function setScanProgress(percent,stage){
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
 }
-async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.loginUrl){$("#loginAppLink").href="snssdk1128://webview?url="+encodeURIComponent(status.loginUrl);$("#loginUrlText").value=status.loginUrl;$("#loginQr").src=status.qrImage||"";$("#downloadLoginQr").href=status.qrImage||"";row.classList.remove("hidden");}else{row.classList.add("hidden");}}catch(_error){}}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}}catch(_error){}}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
   $("#scanCaption").textContent="扫描来源：账号 "+(state.scan.accountIndex+1)+"（"+state.scan.account+"）。勾选后加入此账号。";
@@ -229,7 +229,6 @@ function bindStaticEvents(){
   $("#openCreator").addEventListener("click",()=>window.open("https://creator.douyin.com/", "_blank", "noopener"));
   $("#scanPinned").addEventListener("click",scanPinned);
   $("#importScanned").addEventListener("click",importScanned);
-  $("#copyLoginLink").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("#loginUrlText").value);toast("登录链接已复制");}catch(_error){$("#loginUrlText").select();document.execCommand("copy");toast("登录链接已复制");}});
   $("#messageTemplate").addEventListener("input",event=>{
     state.config.messageTemplate=event.target.value;
     $("#messageCounter").textContent=event.target.value.length+" 字";
