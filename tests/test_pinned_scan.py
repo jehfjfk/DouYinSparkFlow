@@ -31,6 +31,12 @@ def test_scan_starts_at_top_and_deduplicates_rows_and_results():
     assert "result_key = unique_id or short_id or title" in source
 
 
+def test_scan_excludes_the_current_account_from_contacts():
+    source = Path("web_app.py").read_text(encoding="utf-8")
+    assert 'account_identity = task_core.norm(account["uniqueId"])' in source
+    assert "task_core.norm(short_id), task_core.norm(unique_id)" in source
+
+
 def test_pin_detection_does_not_use_broad_parent_or_pin_substrings():
     source = Path("web_app.py").read_text(encoding="utf-8")
     pin_block = source.split("def is_pinned_item", 1)[1].split("conversation_list.evaluate", 1)[0]

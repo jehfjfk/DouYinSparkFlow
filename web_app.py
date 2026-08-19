@@ -454,6 +454,7 @@ def scan_pinned_account(account_index, finalize=True):
     cookies = parse_json(read_env().get(f"COOKIES_{account['uniqueId'].upper()}", "[]"), [])
     if not cookies:
         raise ValueError(f"账号 {account['username']} 尚未配置 Cookie")
+    account_identity = task_core.norm(account["uniqueId"])
 
     task_core.userIDDict.clear()
     playwright, browser = get_browser()
@@ -546,6 +547,10 @@ def scan_pinned_account(account_index, finalize=True):
                         page.wait_for_timeout(200)
                     short_id = identity[0] if identity else ""
                     unique_id = identity[1] if len(identity) > 1 else ""
+                    if account_identity and account_identity in {
+                        task_core.norm(short_id), task_core.norm(unique_id)
+                    }:
+                        continue
                     result_key = unique_id or short_id or title
                     if result_key in result_keys:
                         continue
