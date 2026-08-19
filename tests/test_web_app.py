@@ -81,6 +81,15 @@ def test_account_can_be_saved_before_targets_are_added(isolated_env):
     assert config["accounts"][0]["targets"] == []
 
 
+def test_account_schedule_enabled_flag_round_trips(isolated_env):
+    config = web_app.save_config({
+        "accounts": [{"username": "暂停账号", "uniqueId": "paused", "enabled": False, "targets": []}]
+    })
+    saved = json.loads(web_app.read_env()["TASKS"])
+    assert saved[0]["enabled"] is False
+    assert config["accounts"][0]["enabled"] is False
+
+
 def test_cookie_validator_accepts_exported_samesite_values():
     cookies = web_app.validate_cookie_json(json.dumps([
         {"name": "sid", "value": "secret", "domain": ".douyin.com", "path": "/", "sameSite": "no_restriction"}

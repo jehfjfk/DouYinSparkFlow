@@ -36,6 +36,22 @@ class TaskCompletionTests(unittest.TestCase):
             self.assertEqual([user["message_template"] for user in users], ["消息一", "消息二"])
         config_module.userData = None
 
+    def test_disabled_account_is_skipped_for_scheduled_run(self):
+        tasks = '[{"username":"enabled","unique_id":"enabled","targets":[]},{"username":"paused","unique_id":"paused","enabled":false,"targets":[]}]'
+        with patch.dict(os.environ, {"TASKS": tasks, "COOKIES_ENABLED": "[]", "COOKIES_PAUSED": "[]", "RUN_ACCOUNT_ID": ""}, clear=False):
+            config_module.userData = None
+            users = config_module.get_userData()
+            self.assertEqual([user["unique_id"] for user in users], ["enabled"])
+        config_module.userData = None
+
+    def test_disabled_account_can_still_be_run_explicitly(self):
+        tasks = '[{"username":"paused","unique_id":"paused","enabled":false,"targets":[]}]'
+        with patch.dict(os.environ, {"TASKS": tasks, "COOKIES_PAUSED": "[]", "RUN_ACCOUNT_ID": "paused"}, clear=False):
+            config_module.userData = None
+            users = config_module.get_userData()
+            self.assertEqual([user["unique_id"] for user in users], ["paused"])
+        config_module.userData = None
+
     def test_all_targets_found_succeeds(self):
         ensure_all_targets_found("account", set())
 

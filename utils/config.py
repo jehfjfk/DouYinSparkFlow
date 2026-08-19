@@ -117,6 +117,10 @@ def get_userData():
         if not tasks:
             raise ValueError(f"未找到指定运行账号: {run_account_id}")
         logger.info(f"本次仅运行指定账号: {run_account_id}")
+    else:
+        # Disabled accounts stay configured for manual runs but are excluded from
+        # the scheduled all-account task.
+        tasks = [task for task in tasks if task.get("enabled", True) is not False]
 
     userData = []
 

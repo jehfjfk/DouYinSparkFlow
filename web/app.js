@@ -70,10 +70,11 @@ function accountMarkup(account,index){
   const targetToggle=account.targets.length>8?'<button class="target-toggle" data-action="toggle-targets" data-target-key="'+escapeHtml(targetKey)+'" type="button" aria-expanded="'+expanded+'">'+(expanded?'收起':'展开全部（+'+(account.targets.length-8)+'）')+'</button>':"";
   return '<article class="account-card" data-index="'+index+'">'+
     '<div class="account-head"><span class="account-index">账号 '+String(index+1).padStart(2,"0")+'</span><div><span class="account-status">'+
-    (account.cookieConfigured?"● Cookie 已配置 · "+account.cookieCount+" 条":"○ Cookie 未配置")+'</span><button class="text-button" data-action="login-refresh" title="网页登录并自动更新 Cookie">更新登录</button><button class="text-button" data-action="run-account" title="仅运行此账号">运行此账号</button><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
+    (account.enabled===false?"○ 每日任务已暂停 · ":(account.cookieConfigured?"● ":"○ "))+(account.cookieConfigured?"Cookie 已配置 · "+account.cookieCount+" 条":"Cookie 未配置")+'</span><button class="text-button" data-action="login-refresh" title="网页登录并自动更新 Cookie">更新登录</button><button class="text-button" data-action="run-account" title="仅运行此账号">运行此账号</button><button class="text-button remove-account" data-action="remove-account" title="删除账号">删除</button></div></div>'+
     '<div class="account-body">'+
     '<label class="field"><span>用户名</span><input data-field="username" value="'+escapeHtml(account.username)+'"></label>'+
     '<label class="field"><span>抖音号</span><input data-field="uniqueId" value="'+escapeHtml(account.uniqueId)+'"></label>'+
+    '<label class="field account-schedule-toggle"><span>每日执行</span><span class="toggle-field"><input type="checkbox" data-field="enabled" '+(account.enabled!==false?'checked':'')+'><span>参与每天凌晨 4 点的续火花任务</span></span></label>'+
     '<label class="field full"><span>该账号发送内容</span><textarea data-field="messageTemplate" rows="4" placeholder="输入该账号每天发送的消息">'+escapeHtml(account.messageTemplate||state.config.messageTemplate)+'</textarea><small class="field-help">使用 [API] 插入每日一言，仅对当前账号生效。</small></label>'+
     '<div class="field full"><span>目标好友 / 群聊</span><div class="target-editor target-fields"><input data-role="target-id" placeholder="好友抖音号或群聊名称"><input data-role="target-aliases" placeholder="昵称或备注，多个用逗号分隔"><button class="button secondary" data-action="add-target">添加</button></div><div class="chips-editor">'+targets+targetToggle+'</div></div>'+
     '<div class="field full"><span>Cookie JSON</span><div class="cookie-row"><textarea data-field="cookies" placeholder="已有 Cookie 不会回显。仅在需要更新时粘贴新的 JSON。"></textarea><div class="cookie-badge"><strong>'+(account.cookieCount||0)+'</strong><span>'+(account.cookieConfigured?"已安全保存":"等待导入")+'</span></div></div></div>'+
@@ -88,7 +89,8 @@ function bindAccountEvents(){
   $$(".account-card").forEach(card=>{
     const index=Number(card.dataset.index);
     card.querySelectorAll("[data-field]").forEach(input=>input.addEventListener("input",()=>{
-      if(input.dataset.field!=="cookies")state.config.accounts[index][input.dataset.field]=input.value;
+      if(input.dataset.field==="enabled")state.config.accounts[index].enabled=input.checked;
+      else if(input.dataset.field!=="cookies")state.config.accounts[index][input.dataset.field]=input.value;
     }));
     const add=()=>{
       const id=card.querySelector('[data-role="target-id"]').value.trim();
@@ -166,6 +168,7 @@ function collectConfig(){
     return Object.assign({},account,{
       username:(card&&card.querySelector('[data-field="username"]').value.trim())||account.username,
       uniqueId:(card&&card.querySelector('[data-field="uniqueId"]').value.trim())||account.uniqueId,
+      enabled:card?card.querySelector('[data-field="enabled"]').checked:account.enabled!==false,
       cookies:(card&&card.querySelector('[data-field="cookies"]').value.trim())||""
     });
   });
