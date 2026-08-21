@@ -46,8 +46,13 @@ async function deleteWebsiteUser(button){
 async function saveWebsiteUser(event){
   event.preventDefault();$("#userFormError").textContent="";
   try{
-    await api("/api/users",{method:"POST",body:JSON.stringify({username:$("#websiteUsername").value.trim(),password:$("#websitePassword").value})});
-    closeUserManager();toast("登录账号已创建，请让用户在手机端完成抖音登录");
+    const result=await api("/api/users",{method:"POST",body:JSON.stringify({username:$("#websiteUsername").value.trim(),password:$("#websitePassword").value})});
+    closeUserManager();
+    if(result.webUsersSync && !result.webUsersSync.ok){
+      toast("账号已在电脑端创建，但尚未同步到手机端："+result.webUsersSync.error,true);
+    }else{
+      toast("登录账号已创建并同步，请用手机端登录");
+    }
   }catch(error){$("#userFormError").textContent=error.message;}
 }
 function escapeHtml(value){
@@ -190,7 +195,8 @@ async function syncGithub(){
     await saveConfig(false);
     const result=await api("/api/github/sync",{method:"POST",body:"{}"});
     const deleted=result.result.deletedSecrets.length;
-    toast("本机与 GitHub 已生效，共 "+result.result.accounts+" 个账号"+(deleted?"，删除 "+deleted+" 个旧账号凭证":""));
+    const userHint=result.result.webUsers?"，网站账号已同步":"";
+    toast("本机与 GitHub 已生效，共 "+result.result.accounts+" 个账号"+(deleted?"，删除 "+deleted+" 个旧账号凭证":"")+userHint);
   }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent="保存并同步";}
 }
 async function scanPinned(){
@@ -211,6 +217,7 @@ function setScanProgress(percent,stage){
   $("#scanProgressFill").style.width=percent+"%";
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
+  $("#verificationForm").classList.toggle("hidden",!String(stage).includes("验证码"));
 }
 async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const pending=pendingScanResult(status.scanResult);if(!pending.contacts.length){clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});return;}const key=JSON.stringify([pending.accountIndex,pending.contacts.map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=pending;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
 function pendingScanResult(result){const account=state.config.accounts[result.accountIndex];if(!account)return result;const configured=new Set((account.targets||[]).flatMap(target=>[target.id,...(target.aliases||[])]).filter(Boolean));return Object.assign({},result,{contacts:(result.contacts||[]).filter(item=>!configured.has(item.uniqueId||item.shortId||item.nickname||item.remark)&&![item.nickname,item.remark].filter(Boolean).some(value=>configured.has(value)))});}
@@ -288,6 +295,7 @@ async function loadLogs(){
 function renderAll(){renderAccounts();renderMessage();renderRuntimeForm();renderOverview();renderStatus();}
 function bindStaticEvents(){
   $("#loginForm").addEventListener("submit",login);
+  $("#verificationForm").addEventListener("submit",async event=>{event.preventDefault();try{await api("/api/login-code",{method:"POST",body:JSON.stringify({code:$("#verificationCode").value})});$("#verificationCode").value="";toast("验证码已提交");}catch(error){toast(error.message,true);}});
   $("#togglePassword").addEventListener("click",event=>{
     const password=$("#loginPassword");
     const visible=password.type==="password";

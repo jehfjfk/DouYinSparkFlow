@@ -7,3 +7,4 @@ logs/
 usersData.json
 .env
 .web-users.json
+.web-users-sync.json

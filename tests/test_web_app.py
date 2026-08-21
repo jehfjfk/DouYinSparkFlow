@@ -257,6 +257,47 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
     assert web_app.authenticate_web_user("member", "wrongpass") is None
 
 
+def test_encrypted_web_user_sync_round_trip(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("WEB_USERS_SYNC_KEY=shared-key\n", encoding="utf-8")
+    monkeypatch.setattr(web_app, "ENV_FILE", env_file)
+    source = {"users": [{"username": "member", "role": "account", "accountIds": ["mine"], "salt": "00" * 16, "hash": "11" * 32}]}
+    assert web_app._decrypt_web_users(web_app._encrypt_web_users(source)) == source
+
+
+def test_remote_web_users_merge_keeps_local_binding():
+    local = {"users": [{"username": "member", "role": "account", "accountIds": ["mine"], "salt": "local", "hash": "local"}, {"username": "deleted", "role": "account", "accountIds": [], "salt": "old", "hash": "old"}]}
+    remote = {"users": [{"username": "member", "role": "account", "accountIds": [], "salt": "remote", "hash": "remote"}, {"username": "new", "role": "account", "accountIds": []}]}
+    merged = web_app._merge_web_users(local, remote)
+    assert merged["users"][0]["accountIds"] == ["mine"]
+    assert {user["username"] for user in merged["users"]} == {"member", "new"}
+
+
+def test_sync_web_users_updates_github_contents(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("WEB_USERS_SYNC_KEY=shared-key\nWEB_USERS_SYNC_REF=main\n", encoding="utf-8")
+    users_file = tmp_path / ".web-users.json"
+    users_file.write_text(json.dumps({"users": [{"username": "member", "role": "account", "accountIds": []}]}), encoding="utf-8")
+    monkeypatch.setattr(web_app, "ENV_FILE", env_file)
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", users_file)
+    monkeypatch.setattr(web_app, "GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(web_app, "github_token", lambda: "token")
+    calls = []
+
+    def request(method, path, token, payload=None):
+        calls.append((method, path, payload))
+        if method == "GET":
+            return {"sha": "old-sha"}
+        return {}
+
+    monkeypatch.setattr(web_app, "github_request", request)
+    result = web_app.sync_web_users()
+    assert result["users"] == 1
+    assert calls[0][0] == "GET"
+    assert calls[1][0] == "PUT"
+    assert calls[1][2]["sha"] == "old-sha"
+
+
 def test_delete_mobile_user_revokes_sessions_without_deleting_account(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
     web_app.upsert_web_user("member", "password8", account_ids=["mine"])

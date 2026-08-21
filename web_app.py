@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 
 ROOT = Path(__file__).resolve().parent
@@ -30,8 +30,16 @@ LOGIN_LOCK = threading.Lock()
 USER_LOCK = threading.Lock()
 SESSIONS = {}
 SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
+LOGIN_PAGE = None
+LOGIN_CODE = None
+LOGIN_CODE_LOCK = threading.Lock()
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
+WEB_USERS_SYNC_FILE = ".web-users-sync.json"
+WEB_USERS_SYNC_CACHE_SECONDS = 15
+WEB_USERS_SYNC_LOCK = threading.Lock()
+WEB_USERS_SYNC_LAST_CHECK = 0.0
+WEB_USERS_SYNC_CACHE = None
 
 
 def read_env():
@@ -118,10 +126,123 @@ def password_record(password, salt=None):
     return {"salt": salt, "hash": digest}
 
 
-def load_web_users():
+def _read_local_web_users():
     if not WEB_USERS_FILE.exists():
         return {"users": []}
-    return json.loads(WEB_USERS_FILE.read_text(encoding="utf-8"))
+    data = json.loads(WEB_USERS_FILE.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) and isinstance(data.get("users"), list) else {"users": []}
+
+
+def _web_users_sync_key():
+    env = read_env()
+    # WEB_USERS_SYNC_KEY can be set explicitly. WEB_ACCESS_PASSWORD is kept as
+    # a backwards-compatible shared key for the already deployed ECS instance.
+    shared = env.get("WEB_USERS_SYNC_KEY") or env.get("WEB_ACCESS_PASSWORD")
+    return hashlib.sha256(shared.encode("utf-8")).digest() if shared else None
+
+
+def _web_users_sync_url():
+    env = read_env()
+    configured = env.get("WEB_USERS_SYNC_URL", "").strip()
+    if configured:
+        return configured
+    repository = env.get("SPARKFLOW_GITHUB_REPOSITORY", GITHUB_REPOSITORY)
+    ref = env.get("WEB_USERS_SYNC_REF", "main").strip() or "main"
+    return f"https://raw.githubusercontent.com/{repository}/{quote(WEB_USERS_SYNC_FILE)}?ref={quote(ref)}"
+
+
+def _encrypt_web_users(data):
+    key = _web_users_sync_key()
+    if not key:
+        raise ValueError("缺少 WEB_USERS_SYNC_KEY 或 WEB_ACCESS_PASSWORD")
+    try:
+        from nacl.secret import SecretBox
+    except ImportError as exc:
+        raise ValueError("缺少 PyNaCl 依赖，请运行 pip install -r requirements.txt") from exc
+    box = SecretBox(key)
+    encrypted = box.encrypt(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return {
+        "version": 1,
+        "algorithm": "xsalsa20poly1305",
+        "payload": base64.b64encode(bytes(encrypted)).decode("ascii"),
+    }
+
+
+def _decrypt_web_users(payload):
+    if not isinstance(payload, dict) or payload.get("version") != 1 or not payload.get("payload"):
+        raise ValueError("网站账号同步文件格式错误")
+    key = _web_users_sync_key()
+    if not key:
+        raise ValueError("缺少 WEB_USERS_SYNC_KEY 或 WEB_ACCESS_PASSWORD")
+    try:
+        from nacl.secret import SecretBox
+    except ImportError as exc:
+        raise ValueError("缺少 PyNaCl 依赖，请运行 pip install -r requirements.txt") from exc
+    box = SecretBox(key)
+    data = json.loads(box.decrypt(base64.b64decode(payload["payload"])).decode("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("users"), list):
+        raise ValueError("网站账号同步内容格式错误")
+    return data
+
+
+def _merge_web_users(local, remote):
+    local_by_username = {}
+    for user in local.get("users", []):
+        if not isinstance(user, dict) or not user.get("username"):
+            continue
+        copy = dict(user)
+        copy["accountIds"] = list(dict.fromkeys(copy.get("accountIds", [])))
+        local_by_username[str(copy["username"])] = copy
+    # The computer's published file is authoritative for account creation and
+    # deletion. Keep only local bindings for users that still exist remotely.
+    merged = {"users": []}
+    for user in remote.get("users", []):
+        if not isinstance(user, dict) or not user.get("username"):
+            continue
+        username = str(user["username"])
+        incoming = dict(user)
+        incoming["accountIds"] = list(dict.fromkeys(incoming.get("accountIds", [])))
+        existing = local_by_username.get(username)
+        local_ids = existing.get("accountIds", []) if existing else []
+        if local_ids and not incoming["accountIds"]:
+            incoming["accountIds"] = local_ids
+        merged["users"].append(incoming)
+    return merged
+
+
+def _fetch_synced_web_users():
+    global WEB_USERS_SYNC_LAST_CHECK, WEB_USERS_SYNC_CACHE
+    # Tests and isolated callers replace WEB_USERS_FILE; avoid network access
+    # for those temporary stores.
+    if WEB_USERS_FILE != ROOT / ".web-users.json":
+        return None
+    now = time.time()
+    with WEB_USERS_SYNC_LOCK:
+        if now - WEB_USERS_SYNC_LAST_CHECK < WEB_USERS_SYNC_CACHE_SECONDS:
+            return WEB_USERS_SYNC_CACHE
+        WEB_USERS_SYNC_LAST_CHECK = now
+        try:
+            with urllib.request.urlopen(_web_users_sync_url(), timeout=5) as response:
+                raw = response.read()
+            remote = _decrypt_web_users(json.loads(raw.decode("utf-8")))
+            WEB_USERS_SYNC_CACHE = remote
+            return remote
+        except Exception:
+            # A temporary GitHub/network failure must leave the local login
+            # store usable.
+            WEB_USERS_SYNC_CACHE = None
+            return None
+
+
+def load_web_users(sync=True):
+    local = _read_local_web_users()
+    remote = _fetch_synced_web_users() if sync else None
+    if remote is None:
+        return local
+    merged = _merge_web_users(local, remote)
+    if merged != local:
+        save_web_users(merged)
+    return merged
 
 
 def save_web_users(data):
@@ -135,7 +256,7 @@ def upsert_web_user(username, password, role="account", account_ids=None):
     username = str(username or "").strip()
     if not username or len(password or "") < 8:
         raise ValueError("网站账号不能为空，密码至少 8 位")
-    data = load_web_users()
+    data = load_web_users(sync=False)
     user = next((item for item in data["users"] if item["username"] == username), None)
     record = {"username": username, "role": role, "accountIds": list(account_ids or []), **password_record(password)}
     if user:
@@ -148,7 +269,7 @@ def upsert_web_user(username, password, role="account", account_ids=None):
 
 def bind_web_user_account(username, account_id):
     with USER_LOCK:
-        data = load_web_users()
+        data = load_web_users(sync=False)
         user = next((item for item in data["users"] if item["username"] == username and item["role"] == "account"), None)
         if not user:
             raise ValueError("网站用户不存在")
@@ -163,7 +284,7 @@ def bind_web_user_account(username, account_id):
 def delete_web_user(username):
     username = str(username or "").strip()
     with USER_LOCK:
-        data = load_web_users()
+        data = load_web_users(sync=False)
         original_count = len(data["users"])
         data["users"] = [
             user for user in data["users"]
@@ -337,7 +458,8 @@ def merge_tasks(existing_tasks, local_tasks):
 
 
 def github_token():
-    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    env = read_env()
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
     if token:
         return token.strip()
     request = "protocol=https\nhost=github.com\n\n"
@@ -364,6 +486,40 @@ def github_request(method, path, token, payload=None):
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise ValueError(f"GitHub 同步失败（HTTP {exc.code}）：{detail[:240]}") from exc
+
+
+def sync_web_users():
+    """Publish encrypted website users for the ECS instance to pull on login."""
+    token = github_token()
+    owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    branch = read_env().get("WEB_USERS_SYNC_REF", "main").strip() or "main"
+    content = json.dumps(_encrypt_web_users(_read_local_web_users()), ensure_ascii=False, indent=2).encode("utf-8")
+    base = f"/repos/{owner}/{repo}/contents/{quote(WEB_USERS_SYNC_FILE)}"
+    current = None
+    try:
+        current = github_request("GET", f"{base}?ref={quote(branch)}", token)
+    except ValueError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    payload = {
+        "message": "chore: sync website login users",
+        "content": base64.b64encode(content).decode("ascii"),
+        "branch": branch,
+    }
+    if current and current.get("sha"):
+        payload["sha"] = current["sha"]
+    github_request("PUT", base, token, payload)
+    global WEB_USERS_SYNC_CACHE, WEB_USERS_SYNC_LAST_CHECK
+    WEB_USERS_SYNC_CACHE = _read_local_web_users()
+    WEB_USERS_SYNC_LAST_CHECK = time.time()
+    return {"file": WEB_USERS_SYNC_FILE, "branch": branch, "users": len(WEB_USERS_SYNC_CACHE["users"])}
+
+
+def sync_web_users_best_effort():
+    try:
+        return {"ok": True, "result": sync_web_users()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def encrypted_secret(value, public_key):
@@ -436,7 +592,14 @@ def sync_github(allowed_account_ids=None):
                     raise
             deleted_secrets.append(name)
 
-    return {"repository": GITHUB_REPOSITORY, "accounts": len(synced_tasks), "secrets": len(active_secrets), "deletedSecrets": deleted_secrets}
+    web_users = sync_web_users() if allowed_account_ids is None else None
+    return {
+        "repository": GITHUB_REPOSITORY,
+        "accounts": len(synced_tasks),
+        "secrets": len(active_secrets),
+        "deletedSecrets": deleted_secrets,
+        "webUsers": web_users,
+    }
 
 
 def scan_pinned_account(account_index, finalize=True):
@@ -600,10 +763,20 @@ def clear_scan_result():
         SCAN_STATUS["scanResult"] = None
 
 
+def submit_login_code(code):
+    global LOGIN_CODE
+    code = str(code or "").strip()
+    if not code.isdigit() or not 4 <= len(code) <= 8:
+        raise ValueError("验证码格式不正确")
+    with LOGIN_CODE_LOCK:
+        LOGIN_CODE = code
+
+
 def refresh_account_login(account_id, continue_to_scan=False):
     """Open an interactive Douyin login and persist the resulting Cookie for one account."""
     from core.browser import get_browser
     from core import tasks as task_core
+    global LOGIN_PAGE, LOGIN_CODE
 
     account_id = str(account_id or "").strip()
     account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
@@ -613,6 +786,9 @@ def refresh_account_login(account_id, continue_to_scan=False):
     playwright, browser = get_browser()
     context = browser.new_context(user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN", timezone_id="Asia/Shanghai")
     page = context.new_page()
+    LOGIN_PAGE = page
+    with LOGIN_CODE_LOCK:
+        LOGIN_CODE = None
     try:
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         try:
@@ -686,7 +862,34 @@ def refresh_account_login(account_id, continue_to_scan=False):
                 if identity_verification:
                     qr_locked = True
                     verification_seen = True
-                    update_scan_status(True, 35, "已扫码：请在电脑身份验证弹窗中选择短信、刷脸或密码", qrImage=None)
+                    try:
+                        sms = page.get_by_text("接收短信验证码", exact=False).first
+                        sms.click(timeout=2500)
+                        page.wait_for_timeout(500)
+                        send_sms = page.get_by_text("发送短信验证", exact=False).first
+                        if send_sms.is_visible():
+                            send_sms.click(timeout=2500)
+                        update_scan_status(True, 38, "短信验证码已发送，请在手机端输入", qrImage=None, verificationRequired=True)
+                    except Exception:
+                        update_scan_status(True, 35, "请在手机端输入短信验证码", qrImage=None, verificationRequired=True)
+                    with LOGIN_CODE_LOCK:
+                        code = LOGIN_CODE
+                    if code:
+                        for selector in ("input[placeholder*='验证码']", "input[placeholder*='验证']", "input[type='text']"):
+                            try:
+                                field = page.locator(selector).last
+                                if field.is_visible():
+                                    field.fill(code)
+                                    for button_text in ("验证", "确认", "登录"):
+                                        buttons = page.get_by_text(button_text, exact=True)
+                                        if buttons.count() and buttons.last.is_visible():
+                                            buttons.last.click(timeout=1500)
+                                            break
+                            except Exception:
+                                continue
+                        with LOGIN_CODE_LOCK:
+                            LOGIN_CODE = None
+                        update_scan_status(True, 42, "验证码已提交，正在确认登录", qrImage=None, verificationRequired=False)
                 elif "扫码成功" in login_text or "确认登录" in login_text:
                     qr_locked = True
                     update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
@@ -699,6 +902,25 @@ def refresh_account_login(account_id, continue_to_scan=False):
                         update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
             except Exception:
                 pass
+            with LOGIN_CODE_LOCK:
+                pending_code = LOGIN_CODE
+            if pending_code and not identity_verification:
+                for selector in ("input[placeholder*='验证码']", "input[placeholder*='验证']", "input[aria-label*='验证码']", "input[type='text']"):
+                    try:
+                        field = page.locator(selector).last
+                        if field.is_visible():
+                            field.fill(pending_code)
+                            for button_text in ("验证", "确认", "登录"):
+                                buttons = page.get_by_text(button_text, exact=True)
+                                if buttons.count() and buttons.last.is_visible():
+                                    buttons.last.click(timeout=1500)
+                                    break
+                            with LOGIN_CODE_LOCK:
+                                LOGIN_CODE = None
+                            update_scan_status(True, 42, "验证码已提交，正在确认登录", qrImage=None, verificationRequired=False)
+                            break
+                    except Exception:
+                        continue
             try:
                 qr_completed = not qr_locator.is_visible()
             except Exception:
@@ -736,6 +958,9 @@ def refresh_account_login(account_id, continue_to_scan=False):
         update_scan_status(False, get_scan_status()["percent"], "登录更新失败", str(exc), loginUrl=None, qrImage=None)
         raise
     finally:
+        LOGIN_PAGE = None
+        with LOGIN_CODE_LOCK:
+            LOGIN_CODE = None
         context.close(); browser.close(); playwright.stop()
 
 
@@ -947,7 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/users":
             if not self.local_master():
                 return self.json_response({"error": "仅本机主账号可管理网站用户"}, 403)
-            return self.json_response({"users": [{"username": item["username"], "role": item["role"], "accountIds": item.get("accountIds", [])} for item in load_web_users()["users"] if item["role"] == "account"]})
+            return self.json_response({"users": [{"username": item["username"], "role": item["role"], "accountIds": item.get("accountIds", [])} for item in load_web_users(sync=False)["users"] if item["role"] == "account"]})
         if parsed.path == "/api/logs":
             if self.allowed_account_ids() is not None:
                 return self.json_response({"entries": []})
@@ -984,11 +1209,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.local_master():
                     return self.json_response({"error": "仅本机主账号可注册网站用户"}, 403)
                 payload = self.read_json()
-                return self.json_response({"ok": True, "user": upsert_web_user(payload.get("username"), payload.get("password"), "account", [])})
+                user = upsert_web_user(payload.get("username"), payload.get("password"), "account", [])
+                return self.json_response({"ok": True, "user": user, "webUsersSync": sync_web_users_best_effort()})
             if self.path == "/api/users/delete":
                 if not self.local_master():
                     return self.json_response({"error": "仅本机主账号可删除网站用户"}, 403)
-                return self.json_response({"ok": True, "user": delete_web_user(self.read_json().get("username"))})
+                user = delete_web_user(self.read_json().get("username"))
+                return self.json_response({"ok": True, "user": user, "webUsersSync": sync_web_users_best_effort()})
+            if self.path == "/api/login-code":
+                submit_login_code(self.read_json().get("code"))
+                return self.json_response({"ok": True})
             if self.path == "/api/config":
                 payload = self.read_json()
                 user = self.current_user()

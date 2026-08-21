@@ -57,6 +57,8 @@ python web_app.py
 
 在“账号与好友”中可持续添加多个账号。每个好友填写抖音号，并可填写多个昵称或备注作为三层匹配兜底。点击“同步到 GitHub”后，`TASKS` 等普通配置会写入仓库 Environment Variables，Cookie 会通过 GitHub 公钥加密后写入 Environment Secrets；每天凌晨 4 点的工作流会自动读取全部账号。
 
+网站登录账号会同时写入加密的 `.web-users-sync.json`，手机端实例在登录时自动拉取并合并该文件。两端 `.env` 中的 `WEB_ACCESS_PASSWORD`（或单独设置的 `WEB_USERS_SYNC_KEY`）必须保持一致；该密钥只用于解密账号同步文件，不会写入 GitHub。
+
 ## 📢交流讨论
 
 已开放讨论区，有疑问或展示相关成果，发布话题需求的可以加入讨论
