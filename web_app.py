@@ -149,7 +149,13 @@ def _web_users_sync_url():
         return configured
     repository = env.get("SPARKFLOW_GITHUB_REPOSITORY", GITHUB_REPOSITORY)
     ref = env.get("WEB_USERS_SYNC_REF", "main").strip() or "main"
-    return f"https://raw.githubusercontent.com/{repository}/{quote(WEB_USERS_SYNC_FILE)}?ref={quote(ref)}"
+    owner, repo = (repository.split("/", 1) + [""])[:2]
+    if not repo:
+        owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    return (
+        "https://raw.githubusercontent.com/"
+        f"{quote(owner)}/{quote(repo)}/{quote(ref, safe='')}/{quote(WEB_USERS_SYNC_FILE.lstrip('/'), safe='')}"
+    )
 
 
 def _encrypt_web_users(data):
@@ -308,11 +314,22 @@ def authenticate_web_user(username, password):
     username = str(username or "").strip()
     if not username or password is None:
         return None
-    user = next((item for item in load_web_users()["users"] if str(item.get("username", "")).strip() == username), None)
-    if not user:
-        return None
-    expected = password_record(str(password), user["salt"])["hash"]
-    return user if hmac.compare_digest(expected, user["hash"]) else None
+    sources = [_read_local_web_users()]
+    remote = _fetch_synced_web_users()
+    if remote is not None:
+        sources.append(remote)
+    for source in sources:
+        for user in source.get("users", []):
+            if not isinstance(user, dict) or str(user.get("username", "")).strip() != username:
+                continue
+            salt = user.get("salt")
+            hashed = user.get("hash")
+            if not salt or not hashed:
+                continue
+            expected = password_record(str(password), salt)["hash"]
+            if hmac.compare_digest(expected, hashed):
+                return user
+    return None
 
 
 def create_session(user):

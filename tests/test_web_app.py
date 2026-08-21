@@ -266,6 +266,14 @@ def test_encrypted_web_user_sync_round_trip(tmp_path, monkeypatch):
     assert web_app._decrypt_web_users(web_app._encrypt_web_users(source)) == source
 
 
+def test_web_users_sync_url_uses_raw_github_path(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("WEB_USERS_SYNC_REF=main\n", encoding="utf-8")
+    monkeypatch.setattr(web_app, "ENV_FILE", env_file)
+    monkeypatch.setattr(web_app, "GITHUB_REPOSITORY", "owner/repo")
+    assert web_app._web_users_sync_url() == "https://raw.githubusercontent.com/owner/repo/main/.web-users-sync.json"
+
+
 def test_remote_web_users_merge_keeps_local_binding():
     local = {"users": [{"username": "member", "role": "account", "accountIds": ["mine"], "salt": "local", "hash": "local"}, {"username": "deleted", "role": "account", "accountIds": [], "salt": "old", "hash": "old"}]}
     remote = {"users": [{"username": "member", "role": "account", "accountIds": [], "salt": "remote", "hash": "remote"}, {"username": "new", "role": "account", "accountIds": []}]}
@@ -307,6 +315,34 @@ def test_delete_mobile_user_revokes_sessions_without_deleting_account(tmp_path, 
     assert result == {"username": "member"}
     assert web_app.authenticate_web_user("member", "password8") is None
     assert "member-token" not in web_app.SESSIONS
+
+
+def test_authenticate_web_user_keeps_local_login_available_when_remote_is_stale(tmp_path, monkeypatch):
+    users_file = tmp_path / ".web-users.json"
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", users_file)
+    web_app.upsert_web_user("local-user", "password8", account_ids=["mine"])
+    stale_salt = "01" * 16
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {"users": [{
+        "username": "local-user",
+        "role": "account",
+        "accountIds": [],
+        "salt": stale_salt,
+        "hash": web_app.password_record("oldpass", stale_salt)["hash"],
+    }]})
+    assert web_app.authenticate_web_user("local-user", "password8")["accountIds"] == ["mine"]
+
+
+def test_authenticate_web_user_falls_back_to_synced_users_when_local_store_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    remote_salt = "02" * 16
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {"users": [{
+        "username": "remote-user",
+        "role": "account",
+        "accountIds": ["mine"],
+        "salt": remote_salt,
+        "hash": web_app.password_record("password8", remote_salt)["hash"],
+    }]})
+    assert web_app.authenticate_web_user("remote-user", "password8")["accountIds"] == ["mine"]
 
 
 def test_unbound_mobile_user_claims_one_new_account(tmp_path, monkeypatch, isolated_env):
