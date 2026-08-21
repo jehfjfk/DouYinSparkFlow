@@ -17,8 +17,17 @@ for attempt in 1 2 3; do
   sleep 3
 done
 if [ "$updated" != true ]; then
-  echo "GitHub fetch failed after 3 attempts" >&2
-  exit 1
+  echo "GitHub fetch failed; using the source archive fallback..." >&2
+  archive_url=${GITHUB_ARCHIVE_URL:-https://codeload.github.com/jehfjfk/DouYinSparkFlow/tar.gz/refs/heads/main}
+  staging=$(mktemp -d)
+  trap 'rm -rf "$staging"' EXIT
+  curl --http1.1 --fail --location --retry 3 --retry-all-errors "$archive_url" -o "$staging/source.tar.gz"
+  mkdir -p "$staging/source"
+  tar -xzf "$staging/source.tar.gz" -C "$staging/source" --strip-components=1
+  # The archive excludes local secrets and runtime state; preserve those files
+  # explicitly in case a future archive includes additional generated files.
+  cp -a "$staging/source/." "$APP_ROOT/"
+  echo "Updated project files from the GitHub source archive." >&2
 fi
 "$APP_ROOT/.venv/bin/pip" install -r requirements.txt
 systemctl restart sparkflow-web nginx
