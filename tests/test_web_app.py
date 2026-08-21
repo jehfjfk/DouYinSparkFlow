@@ -254,6 +254,7 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
     web_app.upsert_web_user("member", "password8", account_ids=["mine"])
     assert web_app.authenticate_web_user("member", "password8")["accountIds"] == ["mine"]
+    assert web_app.authenticate_web_user(" member ", "password8")["accountIds"] == ["mine"]
     assert web_app.authenticate_web_user("member", "wrongpass") is None
 
 

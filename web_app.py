@@ -40,6 +40,7 @@ WEB_USERS_SYNC_CACHE_SECONDS = 15
 WEB_USERS_SYNC_LOCK = threading.Lock()
 WEB_USERS_SYNC_LAST_CHECK = 0.0
 WEB_USERS_SYNC_CACHE = None
+WEB_USERS_SYNC_LAST_ERROR = None
 
 
 def read_env():
@@ -211,7 +212,7 @@ def _merge_web_users(local, remote):
 
 
 def _fetch_synced_web_users():
-    global WEB_USERS_SYNC_LAST_CHECK, WEB_USERS_SYNC_CACHE
+    global WEB_USERS_SYNC_LAST_CHECK, WEB_USERS_SYNC_CACHE, WEB_USERS_SYNC_LAST_ERROR
     # Tests and isolated callers replace WEB_USERS_FILE; avoid network access
     # for those temporary stores.
     if WEB_USERS_FILE != ROOT / ".web-users.json":
@@ -226,11 +227,13 @@ def _fetch_synced_web_users():
                 raw = response.read()
             remote = _decrypt_web_users(json.loads(raw.decode("utf-8")))
             WEB_USERS_SYNC_CACHE = remote
+            WEB_USERS_SYNC_LAST_ERROR = None
             return remote
-        except Exception:
+        except Exception as exc:
             # A temporary GitHub/network failure must leave the local login
             # store usable.
             WEB_USERS_SYNC_CACHE = None
+            WEB_USERS_SYNC_LAST_ERROR = type(exc).__name__
             return None
 
 
@@ -302,7 +305,10 @@ def delete_web_user(username):
 
 
 def authenticate_web_user(username, password):
-    user = next((item for item in load_web_users()["users"] if item["username"] == str(username)), None)
+    username = str(username or "").strip()
+    if not username or password is None:
+        return None
+    user = next((item for item in load_web_users()["users"] if str(item.get("username", "")).strip() == username), None)
     if not user:
         return None
     expected = password_record(str(password), user["salt"])["hash"]
@@ -592,7 +598,7 @@ def sync_github(allowed_account_ids=None):
                     raise
             deleted_secrets.append(name)
 
-    web_users = sync_web_users() if allowed_account_ids is None else None
+    web_users = sync_web_users_best_effort() if allowed_account_ids is None else None
     return {
         "repository": GITHUB_REPOSITORY,
         "accounts": len(synced_tasks),
