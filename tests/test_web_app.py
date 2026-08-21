@@ -320,22 +320,22 @@ def test_delete_mobile_user_revokes_sessions_without_deleting_account(tmp_path, 
     assert "member-token" not in web_app.SESSIONS
 
 
-def test_authenticate_web_user_prefers_local_user_when_remote_is_stale(tmp_path, monkeypatch):
+def test_authenticate_web_user_uses_synced_user_when_remote_is_authoritative(tmp_path, monkeypatch):
     users_file = tmp_path / ".web-users.json"
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", users_file)
     web_app.upsert_web_user("local-user", "password8", account_ids=["mine"])
-    stale_salt = "01" * 16
+    remote_salt = "01" * 16
     monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {"users": [{
         "username": "local-user",
         "role": "account",
-        "accountIds": [],
-        "salt": stale_salt,
-        "hash": web_app.password_record("oldpass", stale_salt)["hash"],
+        "accountIds": ["remote"],
+        "salt": remote_salt,
+        "hash": web_app.password_record("password8", remote_salt)["hash"],
     }]})
-    assert web_app.authenticate_web_user("local-user", "password8")["accountIds"] == ["mine"]
+    assert web_app.authenticate_web_user("local-user", "password8")["accountIds"] == ["remote"]
 
 
-def test_authenticate_web_user_falls_back_to_local_user_when_remote_store_is_missing_username(tmp_path, monkeypatch):
+def test_authenticate_web_user_denies_stale_local_user_when_remote_store_is_authoritative(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
     local_salt = "03" * 16
     web_app.upsert_web_user("local-only", "password8", account_ids=["mine"])
@@ -346,14 +346,44 @@ def test_authenticate_web_user_falls_back_to_local_user_when_remote_store_is_mis
         "salt": local_salt,
         "hash": web_app.password_record("password8", local_salt)["hash"],
     }]})
-    assert web_app.authenticate_web_user("local-only", "password8")["accountIds"] == ["mine"]
+    assert web_app.authenticate_web_user("local-only", "password8") is None
 
 
-def test_api_login_accepts_old_and_new_accounts_without_remote_sync(tmp_path, monkeypatch):
+def test_authenticate_web_user_uses_synced_users_when_local_store_is_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
-    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: None)
-    web_app.upsert_web_user("old-mobile", "oldpass88", account_ids=["old"])
-    web_app.upsert_web_user("new-mobile", "newpass88", account_ids=["new"])
+    remote_salt = "04" * 16
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {"users": [{
+        "username": "remote-user",
+        "role": "account",
+        "accountIds": ["mine"],
+        "salt": remote_salt,
+        "hash": web_app.password_record("password8", remote_salt)["hash"],
+    }]})
+    assert web_app.authenticate_web_user("remote-user", "password8")["accountIds"] == ["mine"]
+
+
+def test_api_login_accepts_old_and_new_accounts_from_synced_users(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    old_salt = "05" * 16
+    new_salt = "06" * 16
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {
+        "users": [
+            {
+                "username": "old-mobile",
+                "role": "account",
+                "accountIds": ["old"],
+                "salt": old_salt,
+                "hash": web_app.password_record("oldpass88", old_salt)["hash"],
+            },
+            {
+                "username": "new-mobile",
+                "role": "account",
+                "accountIds": ["new"],
+                "salt": new_salt,
+                "hash": web_app.password_record("newpass88", new_salt)["hash"],
+            },
+        ]
+    })
 
     server = web_app.ThreadingHTTPServer(("127.0.0.1", 0), web_app.Handler)
     port = server.server_address[1]
@@ -368,14 +398,23 @@ def test_api_login_accepts_old_and_new_accounts_without_remote_sync(tmp_path, mo
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=5) as response:
-            return response.status, json.loads(response.read().decode("utf-8")), response.headers.get("Set-Cookie", "")
+            return response.status
 
     try:
-        assert login("old-mobile", "oldpass88")[0] == 200
-        assert login("new-mobile", "newpass88")[0] == 200
+        assert login("old-mobile", "oldpass88") == 200
+        assert login("new-mobile", "newpass88") == 200
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_api_login_accepts_old_and_new_accounts_without_remote_sync(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: None)
+    web_app.upsert_web_user("old-mobile", "oldpass88", account_ids=["old"])
+    web_app.upsert_web_user("new-mobile", "newpass88", account_ids=["new"])
+    assert web_app.authenticate_web_user("old-mobile", "oldpass88")["accountIds"] == ["old"]
+    assert web_app.authenticate_web_user("new-mobile", "newpass88")["accountIds"] == ["new"]
 
 
 def test_unbound_mobile_user_claims_one_new_account(tmp_path, monkeypatch, isolated_env):

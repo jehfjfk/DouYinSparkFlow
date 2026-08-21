@@ -30,6 +30,7 @@ if [ "$updated" != true ]; then
   echo "Updated project files from the GitHub source archive." >&2
 fi
 "$APP_ROOT/.venv/bin/pip" install -r requirements.txt
+systemctl enable --now sparkflow-web nginx
 systemctl restart sparkflow-web nginx
 systemctl is-active --quiet sparkflow-web nginx
 ready=false

@@ -316,33 +316,23 @@ def authenticate_web_user(username, password):
         return None
     local = _read_local_web_users()
     remote = _fetch_synced_web_users()
-
-    def find_user(source):
-        return next(
-            (
-                item
-                for item in source.get("users", [])
-                if isinstance(item, dict) and str(item.get("username", "")).strip() == username
-            ),
-            None,
-        )
-
-    def matches(user):
-        salt = user.get("salt")
-        hashed = user.get("hash")
-        if not salt or not hashed:
-            return False
-        expected = password_record(str(password), salt)["hash"]
-        return hmac.compare_digest(expected, hashed)
-
-    local_user = find_user(local)
-    if local_user and matches(local_user):
-        return local_user
-    if remote is not None:
-        remote_user = find_user(remote)
-        if remote_user and matches(remote_user):
-            return remote_user
-    return None
+    users = _merge_web_users(local, remote) if remote is not None else local
+    user = next(
+        (
+            item
+            for item in users.get("users", [])
+            if isinstance(item, dict) and str(item.get("username", "")).strip() == username
+        ),
+        None,
+    )
+    if not user:
+        return None
+    salt = user.get("salt")
+    hashed = user.get("hash")
+    if not salt or not hashed:
+        return None
+    expected = password_record(str(password), salt)["hash"]
+    return user if hmac.compare_digest(expected, hashed) else None
 
 
 def create_session(user):
