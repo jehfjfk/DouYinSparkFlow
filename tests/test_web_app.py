@@ -1,4 +1,7 @@
 import json
+import threading
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -317,7 +320,7 @@ def test_delete_mobile_user_revokes_sessions_without_deleting_account(tmp_path, 
     assert "member-token" not in web_app.SESSIONS
 
 
-def test_authenticate_web_user_keeps_local_login_available_when_remote_is_stale(tmp_path, monkeypatch):
+def test_authenticate_web_user_prefers_local_user_when_remote_is_stale(tmp_path, monkeypatch):
     users_file = tmp_path / ".web-users.json"
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", users_file)
     web_app.upsert_web_user("local-user", "password8", account_ids=["mine"])
@@ -332,17 +335,47 @@ def test_authenticate_web_user_keeps_local_login_available_when_remote_is_stale(
     assert web_app.authenticate_web_user("local-user", "password8")["accountIds"] == ["mine"]
 
 
-def test_authenticate_web_user_falls_back_to_synced_users_when_local_store_is_missing(tmp_path, monkeypatch):
+def test_authenticate_web_user_falls_back_to_local_user_when_remote_store_is_missing_username(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
-    remote_salt = "02" * 16
+    local_salt = "03" * 16
+    web_app.upsert_web_user("local-only", "password8", account_ids=["mine"])
     monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: {"users": [{
-        "username": "remote-user",
+        "username": "other-user",
         "role": "account",
-        "accountIds": ["mine"],
-        "salt": remote_salt,
-        "hash": web_app.password_record("password8", remote_salt)["hash"],
+        "accountIds": [],
+        "salt": local_salt,
+        "hash": web_app.password_record("password8", local_salt)["hash"],
     }]})
-    assert web_app.authenticate_web_user("remote-user", "password8")["accountIds"] == ["mine"]
+    assert web_app.authenticate_web_user("local-only", "password8")["accountIds"] == ["mine"]
+
+
+def test_api_login_accepts_old_and_new_accounts_without_remote_sync(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    monkeypatch.setattr(web_app, "_fetch_synced_web_users", lambda: None)
+    web_app.upsert_web_user("old-mobile", "oldpass88", account_ids=["old"])
+    web_app.upsert_web_user("new-mobile", "newpass88", account_ids=["new"])
+
+    server = web_app.ThreadingHTTPServer(("127.0.0.1", 0), web_app.Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def login(username, password):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/auth/login",
+            data=json.dumps({"username": username, "password": password}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8")), response.headers.get("Set-Cookie", "")
+
+    try:
+        assert login("old-mobile", "oldpass88")[0] == 200
+        assert login("new-mobile", "newpass88")[0] == 200
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_unbound_mobile_user_claims_one_new_account(tmp_path, monkeypatch, isolated_env):
