@@ -22,6 +22,11 @@ install -d -o "$APP_USER" -g "$APP_USER" -m 750 "$APP_ROOT/logs"
 if [ ! -f "$APP_ROOT/.web-users.json" ]; then
   printf '{"users":[]}\n' > "$APP_ROOT/.web-users.json"
 fi
+# save_web_users replaces this file atomically, so the service needs write
+# access to its parent directory. Remove leftovers from root-run deployments.
+rm -f "$APP_ROOT/.web-users.json.tmp"
+chown "$APP_USER:$APP_USER" "$APP_ROOT"
+chmod 775 "$APP_ROOT"
 chown "$APP_USER:$APP_USER" "$APP_ROOT/.web-users.json" "$APP_ROOT/logs"
 chmod 600 "$APP_ROOT/.web-users.json"
 if [ -f "$APP_ROOT/.env" ]; then
