@@ -276,6 +276,38 @@ def test_login_refresh_does_not_hide_verification_errors_or_restart_requests():
     assert "except LoginRestartRequested:" in source
 
 
+def test_login_refresh_saves_locally_before_background_github_sync():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert "def start_login_github_sync(account_id, cookie_value):" in source
+    assert "start_login_github_sync(account_id, value)" in source
+    assert "githubSyncPending=True" in source
+    assert 'page.goto(task_core.CHAT_URL, wait_until="commit", timeout=10000)' in source
+    assert 'public_config(refresh_sync=False)' in source
+    assert 'qr_image or None' in source
+
+
+def test_background_github_sync_updates_only_current_login(monkeypatch):
+    requests = []
+    monkeypatch.setattr(web_app, "github_token", lambda: "token")
+    monkeypatch.setattr(web_app, "encrypted_secret", lambda value, key: "encrypted")
+
+    def request(method, path, token, payload=None):
+        requests.append((method, path))
+        if path.endswith("/secrets/public-key"):
+            return {"key": "key", "key_id": "id"}
+        return {}
+
+    monkeypatch.setattr(web_app, "github_request", request)
+    web_app.update_scan_status(True, 80, "后台同步", ownerAccountId="selected")
+    worker = web_app.start_login_github_sync("selected", "cookie-json")
+    worker.join(timeout=2)
+    status = web_app.get_scan_status()
+    assert not worker.is_alive()
+    assert status["githubSynced"] is True
+    assert status["githubSyncPending"] is False
+    assert any(path.endswith("/secrets/public-key") for _, path in requests)
+
+
 def test_dashboard_uses_expiring_session_cookie(monkeypatch):
     handler = object.__new__(web_app.Handler)
     token = "test-session"
@@ -565,7 +597,7 @@ def test_scoped_save_preserves_other_accounts(isolated_env):
 
 
 def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):
-    monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": [
+    monkeypatch.setattr(web_app, "public_config", lambda **_: {"accounts": [
         {"uniqueId": "old"}, {"uniqueId": "selected"},
     ]})
     monkeypatch.setattr(web_app, "refresh_account_login", lambda account_id, continue_to_scan=False: {
@@ -583,7 +615,7 @@ def test_login_success_continues_with_selected_account_pinned_scan(monkeypatch):
 
 
 def test_closed_login_browser_is_rebuilt_once(monkeypatch):
-    monkeypatch.setattr(web_app, "public_config", lambda: {"accounts": [{"uniqueId": "selected"}]})
+    monkeypatch.setattr(web_app, "public_config", lambda **_: {"accounts": [{"uniqueId": "selected"}]})
     calls = []
     def refresh(account_id, continue_to_scan=False):
         calls.append(account_id)

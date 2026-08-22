@@ -290,7 +290,7 @@ async function refreshAccountLogin(index){
       await saveConfig(false);state.session.accountIds=[account.uniqueId];document.body.classList.remove("unbound-user");
     }
     $("#scanProgress").classList.remove("hidden");setScanProgress(0,"准备打开登录窗口");
-    timer=setInterval(loadScanProgress,500);
+    timer=setInterval(loadScanProgress,300);
     let result=null,requestError=null;
     try{result=await api("/api/account-login-refresh",{method:"POST",body:JSON.stringify({accountId:account.uniqueId})});}catch(error){requestError=error;}
     if(flowVersion!==state.loginFlowVersion)return;
@@ -302,7 +302,7 @@ async function refreshAccountLogin(index){
     const scanResult=result?.result?.scan||loginStatus.scanResult;
     if(!scanResult){throw requestError||new Error("登录后的置顶好友扫描未完成");}
     account.cookieConfigured=true;if(result)account.cookieCount=result.result.login.cookieCount;renderAccounts();
-    const syncHint=result?.result?.login?.githubSynced===false?"；当前站点已保存，GitHub 凭证同步待电脑端保存并同步":"";
+    const syncHint=result?.result?.login?.githubSyncPending?"；GitHub 凭证正在后台同步":"";
     state.scan=pendingScanResult(scanResult);if(state.scan.contacts.length){renderScanResults();toast((scanResult.message||"登录已更新，置顶好友扫描完成")+syncHint);}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("登录已更新，置顶会话均已配置"+syncHint);}
   }catch(error){if(flowVersion===state.loginFlowVersion)toast(error.message,true);}finally{if(timer)clearInterval(timer);if(flowVersion===state.loginFlowVersion){await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}}
 }

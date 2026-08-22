@@ -28,9 +28,10 @@ ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
 LOGIN_LOCK = threading.Lock()
 LOGIN_CANCEL_EVENT = threading.Event()
+GITHUB_SYNC_LOCK = threading.Lock()
 USER_LOCK = threading.Lock()
 SESSIONS = {}
-SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False}
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False, "githubSyncAccountId": None, "githubSyncPending": False, "githubSynced": False, "githubSyncError": None}
 LOGIN_PAGE = None
 LOGIN_CODE = None
 LOGIN_CODE_LOCK = threading.Lock()
@@ -103,8 +104,9 @@ def parse_json(value, fallback):
         return fallback
 
 
-def public_config(allowed_account_ids=None):
-    refresh_config_from_sync()
+def public_config(allowed_account_ids=None, refresh_sync=True):
+    if refresh_sync:
+        refresh_config_from_sync()
     env = read_env()
     tasks = parse_json(env.get("TASKS", "[]"), [])
     accounts = []
@@ -851,6 +853,48 @@ def sync_config_snapshot_best_effort(token=None):
         return {"ok": False, "error": str(exc)}
 
 
+def sync_login_to_github(account_id, cookie_value):
+    """Push a refreshed Cookie without blocking the interactive login flow."""
+    try:
+        token = github_token()
+        with GITHUB_SYNC_LOCK:
+            owner, repo = GITHUB_REPOSITORY.split("/", 1)
+            base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
+            key_info = github_request("GET", f"{base}/secrets/public-key", token)
+            github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
+                "encrypted_value": encrypted_secret(cookie_value, key_info["key"]),
+                "key_id": key_info["key_id"],
+            })
+            snapshot = sync_config_snapshot_best_effort(token)
+        with SCAN_LOCK:
+            if SCAN_STATUS.get("githubSyncAccountId") == account_id:
+                SCAN_STATUS["githubSynced"] = True
+                SCAN_STATUS["githubSyncPending"] = False
+                SCAN_STATUS["githubSyncError"] = None if snapshot.get("ok") else snapshot.get("error")
+    except Exception as exc:
+        with SCAN_LOCK:
+            if SCAN_STATUS.get("githubSyncAccountId") == account_id:
+                SCAN_STATUS["githubSynced"] = False
+                SCAN_STATUS["githubSyncPending"] = False
+                SCAN_STATUS["githubSyncError"] = str(exc)
+
+
+def start_login_github_sync(account_id, cookie_value):
+    with SCAN_LOCK:
+        SCAN_STATUS["githubSynced"] = False
+        SCAN_STATUS["githubSyncPending"] = True
+        SCAN_STATUS["githubSyncError"] = None
+        SCAN_STATUS["githubSyncAccountId"] = account_id
+    worker = threading.Thread(
+        target=sync_login_to_github,
+        args=(account_id, cookie_value),
+        name="sparkflow-github-cookie-sync",
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
 def encrypted_secret(value, public_key):
     try:
         from nacl import encoding, public
@@ -942,7 +986,7 @@ def scan_pinned_account(account_index, finalize=True):
     from core import tasks as task_core
     from utils.config import sanitize_cookies
 
-    config = public_config()
+    config = public_config(refresh_sync=False)
     try:
         account = config["accounts"][int(account_index)]
     except (IndexError, TypeError, ValueError) as exc:
@@ -959,19 +1003,37 @@ def scan_pinned_account(account_index, finalize=True):
         user_agent=task_core.WINDOWS_CHROME_USER_AGENT, locale="zh-CN",
         timezone_id="Asia/Shanghai", viewport={"width": 1440, "height": 900},
     )
-    context.set_default_timeout(config["browserTimeout"])
+    # Scanning is read-only; a missing virtualized node should move on quickly
+    # instead of inheriting the task runner's 120-second browser timeout.
+    context.set_default_timeout(min(config["browserTimeout"], 5000))
     page = context.new_page()
     page.on("response", task_core.handle_response)
     results = []
     try:
         update_scan_status(True, 15, "正在加载 Cookie")
         context.add_cookies(sanitize_cookies(cookies))
-        update_scan_status(True, 25, "正在打开抖音创作者中心")
-        page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
-        page.wait_for_timeout(1200)
-        update_scan_status(True, 40, "正在进入消息列表")
-        task_core.open_chat_page(page)
-        page.wait_for_timeout(max(1000, config["friendListWaitTime"]))
+        update_scan_status(True, 25, "正在打开抖音消息列表")
+        try:
+            page.goto(task_core.CHAT_URL, wait_until="commit", timeout=10000)
+            task_core.wait_for_chat_ready(page, timeout=10000)
+        except task_core.AuthenticationRequiredError:
+            raise
+        except Exception:
+            # Keep the established retry path for a slow Douyin response.
+            task_core.open_chat_page(page)
+        list_deadline = time.monotonic() + max(0.5, config["friendListWaitTime"] / 1000)
+        last_item_count = 0
+        stable_item_rounds = 0
+        while time.monotonic() < list_deadline:
+            item_count = page.locator(task_core.CONVERSATION_LIST_SELECTOR).locator(task_core.CONVERSATION_ITEM_SELECTOR).count()
+            if item_count > 0 and item_count == last_item_count:
+                stable_item_rounds += 1
+                if stable_item_rounds >= 2:
+                    break
+            else:
+                stable_item_rounds = 0
+            last_item_count = item_count
+            page.wait_for_timeout(120)
         update_scan_status(True, 55, "正在读取会话列表")
         conversation_list = page.locator(task_core.CONVERSATION_LIST_SELECTOR)
         def is_pinned_item(item):
@@ -1030,9 +1092,9 @@ def scan_pinned_account(account_index, finalize=True):
                     new_rows += 1
                     if not is_pinned_item(item):
                         continue
-                    item.click()
+                    item.click(timeout=1000)
                     identity = []
-                    identity_deadline = time.monotonic() + 2
+                    identity_deadline = time.monotonic() + 0.8
                     while time.monotonic() < identity_deadline:
                         raise_if_login_restart_requested()
                         identity = task_core.userIDDict.get(title, [])
@@ -1043,7 +1105,7 @@ def scan_pinned_account(account_index, finalize=True):
                             )
                         if identity:
                             break
-                        page.wait_for_timeout(200)
+                        page.wait_for_timeout(100)
                     short_id = identity[0] if identity else ""
                     unique_id = identity[1] if len(identity) > 1 else ""
                     if account_identity and account_identity in {
@@ -1132,7 +1194,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
     global LOGIN_PAGE, LOGIN_CODE
 
     account_id = str(account_id or "").strip()
-    account = next((item for item in public_config()["accounts"] if item["uniqueId"] == account_id), None)
+    account = next((item for item in public_config(refresh_sync=False)["accounts"] if item["uniqueId"] == account_id), None)
     if not account:
         raise ValueError("指定账号不存在")
     update_scan_status(True, 5, "正在生成抖音登录链接", loginUrl=None, qrImage=None, scanResult=None, ownerAccountId=account_id)
@@ -1266,17 +1328,10 @@ def refresh_account_login(account_id, continue_to_scan=False):
         qr_image = qr_locator.get_attribute("src")
         if not qr_image or qr_image.startswith("blob:"):
             qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
-        login_url = None
-        if qr_image and qr_image.startswith("data:image"):
-            try:
-                import cv2
-                import numpy as np
-                image_bytes = base64.b64decode(qr_image.split(",", 1)[1])
-                matrix = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-                login_url, _, _ = cv2.QRCodeDetector().detectAndDecode(matrix)
-            except Exception:
-                login_url = None
-        update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
+        # The QR image is the only usable login artifact. Decoding it with
+        # OpenCV adds seconds and the resulting URL cannot be opened directly
+        # by Douyin, so publish the image immediately.
+        update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=None, qrImage=qr_image or None)
         deadline = time.monotonic() + 180
         auth_cookie_names = {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt", "uid_tt_ss"}
         qr_locked = False
@@ -1424,7 +1479,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
                         raise ValueError("登录已确认，但抖音主站同步超时，请再次点击更新登录")
                     update_scan_status(True, 45, "登录已确认，正在等待抖音主站同步", loginUrl=None, qrImage=None)
                     page.wait_for_timeout(1200)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(250)
         else:
             raise ValueError("等待登录超时，请重新点击后在 5 分钟内完成登录")
 
@@ -1433,34 +1488,23 @@ def refresh_account_login(account_id, continue_to_scan=False):
         value = json.dumps(cookies, ensure_ascii=False, separators=(",", ":"))
         write_env({f"COOKIES_{account_id.upper()}": value})
         _cache_local_config_snapshot()
-        github_synced = False
-        snapshot_synced = False
-        try:
-            token = github_token()
-            owner, repo = GITHUB_REPOSITORY.split("/", 1)
-            base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
-            key_info = github_request("GET", f"{base}/secrets/public-key", token)
-            github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
-                "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
-            })
-            github_synced = True
-            # Keep the always-on ECS snapshot aligned when a phone user
-            # refreshes a Cookie, so its next config pull does not restore an
-            # older value.
-            snapshot_synced = bool(sync_config_snapshot_best_effort(token).get("ok"))
-        except Exception:
-            # The local Cookie is already usable for this ECS process. A
-            # missing GitHub credential must not turn a successful QR login
-            # into a failed login; the computer dashboard can sync it later.
-            pass
-        login_stage = "登录已更新，正在启动置顶好友扫描" if github_synced else "登录已更新（当前站点已保存 Cookie），正在启动置顶好友扫描"
-        update_scan_status(continue_to_scan, 80 if continue_to_scan else 100, login_stage, loginUrl=None, qrImage=None)
+        login_stage = "登录已更新，正在扫描置顶好友（GitHub 后台同步）"
+        update_scan_status(
+            continue_to_scan,
+            80 if continue_to_scan else 100,
+            login_stage,
+            loginUrl=None,
+            qrImage=None,
+            githubSyncPending=True,
+        )
+        start_login_github_sync(account_id, value)
         return {
             "accountId": account_id,
             "cookieCount": len(cookies),
             "updated": True,
-            "githubSynced": github_synced,
-            "snapshotSynced": snapshot_synced,
+            "githubSynced": False,
+            "githubSyncPending": True,
+            "snapshotSynced": False,
         }
     except Exception as exc:
         update_scan_status(False, get_scan_status()["percent"], "登录更新失败", str(exc), loginUrl=None, qrImage=None)
@@ -1486,7 +1530,7 @@ def refresh_login_and_scan(account_id):
             raise ValueError("旧的登录流程仍在退出，请再次点击更新登录")
     try:
         LOGIN_CANCEL_EVENT.clear()
-        accounts = public_config()["accounts"]
+        accounts = public_config(refresh_sync=False)["accounts"]
         account_index = next((index for index, item in enumerate(accounts) if item["uniqueId"] == str(account_id)), None)
         if account_index is None:
             raise ValueError("指定账号不存在")
@@ -1698,7 +1742,7 @@ class Handler(BaseHTTPRequestHandler):
             status = get_scan_status()
             allowed = self.allowed_account_ids()
             if allowed is not None and status.get("ownerAccountId") not in set(allowed):
-                status = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False}
+                status = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False, "githubSyncAccountId": None, "githubSyncPending": False, "githubSynced": False, "githubSyncError": None}
             elif status.get("scanResult"):
                 visible = public_config(allowed)["accounts"]
                 status["scanResult"] = dict(status["scanResult"])
