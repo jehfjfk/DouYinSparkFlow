@@ -23,6 +23,9 @@ def get_browser():
     :return: 浏览器实例
     """
 
+    # Server deployments should not depend on a desktop DISPLAY. Keep the
+    # existing local debug behavior, while allowing systemd to force headless.
+    force_headless = os.getenv("SPARKFLOW_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
     headless = True
 
     env = get_environment()
@@ -30,7 +33,7 @@ def get_browser():
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.abspath(
             os.path.join(os.path.dirname(__file__), PLAYWRIGHT_BROWSERS_PATH)
         )
-        if DEBUG:
+        if DEBUG and not force_headless:
             headless = False
     elif env == Environment.PACKED:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.abspath(

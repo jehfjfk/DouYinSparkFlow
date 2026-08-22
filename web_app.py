@@ -37,8 +37,10 @@ GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSpar
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 WEB_USERS_SYNC_FILE = ".web-users-sync.json"
 WEB_USERS_SYNC_CACHE_SECONDS = 15
+WEB_USERS_SYNC_STALE_SECONDS = 86400
 WEB_USERS_SYNC_LOCK = threading.Lock()
 WEB_USERS_SYNC_LAST_CHECK = 0.0
+WEB_USERS_SYNC_LAST_SUCCESS = 0.0
 WEB_USERS_SYNC_CACHE = None
 WEB_USERS_SYNC_LAST_ERROR = None
 
@@ -130,7 +132,10 @@ def password_record(password, salt=None):
 def _read_local_web_users():
     if not WEB_USERS_FILE.exists():
         return {"users": []}
-    data = json.loads(WEB_USERS_FILE.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(WEB_USERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"users": []}
     return data if isinstance(data, dict) and isinstance(data.get("users"), list) else {"users": []}
 
 
@@ -156,6 +161,24 @@ def _web_users_sync_url():
         "https://raw.githubusercontent.com/"
         f"{quote(owner)}/{quote(repo)}/{quote(ref, safe='')}/{quote(WEB_USERS_SYNC_FILE.lstrip('/'), safe='')}"
     )
+
+
+def _web_users_sync_urls():
+    """Return reachable GitHub mirrors without inheriting a broken proxy."""
+    env = read_env()
+    primary = _web_users_sync_url()
+    repository = env.get("SPARKFLOW_GITHUB_REPOSITORY", GITHUB_REPOSITORY)
+    ref = env.get("WEB_USERS_SYNC_REF", "main").strip() or "main"
+    owner, repo = (repository.split("/", 1) + [""])[:2]
+    if not repo:
+        owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    relative = quote(WEB_USERS_SYNC_FILE.lstrip("/"), safe="")
+    mirrors = [
+        primary,
+        f"https://cdn.jsdelivr.net/gh/{quote(owner)}/{quote(repo)}@{quote(ref, safe='')}/{relative}",
+        f"https://github.com/{quote(owner)}/{quote(repo)}/raw/refs/heads/{quote(ref, safe='')}/{relative}",
+    ]
+    return list(dict.fromkeys(mirrors))
 
 
 def _encrypt_web_users(data):
@@ -218,7 +241,7 @@ def _merge_web_users(local, remote):
 
 
 def _fetch_synced_web_users():
-    global WEB_USERS_SYNC_LAST_CHECK, WEB_USERS_SYNC_CACHE, WEB_USERS_SYNC_LAST_ERROR
+    global WEB_USERS_SYNC_LAST_CHECK, WEB_USERS_SYNC_LAST_SUCCESS, WEB_USERS_SYNC_CACHE, WEB_USERS_SYNC_LAST_ERROR
     # Tests and isolated callers replace WEB_USERS_FILE; avoid network access
     # for those temporary stores.
     if WEB_USERS_FILE != ROOT / ".web-users.json":
@@ -228,19 +251,29 @@ def _fetch_synced_web_users():
         if now - WEB_USERS_SYNC_LAST_CHECK < WEB_USERS_SYNC_CACHE_SECONDS:
             return WEB_USERS_SYNC_CACHE
         WEB_USERS_SYNC_LAST_CHECK = now
-        try:
-            with urllib.request.urlopen(_web_users_sync_url(), timeout=5) as response:
-                raw = response.read()
-            remote = _decrypt_web_users(json.loads(raw.decode("utf-8")))
-            WEB_USERS_SYNC_CACHE = remote
-            WEB_USERS_SYNC_LAST_ERROR = None
-            return remote
-        except Exception as exc:
-            # A temporary GitHub/network failure must leave the local login
-            # store usable.
-            WEB_USERS_SYNC_CACHE = None
-            WEB_USERS_SYNC_LAST_ERROR = type(exc).__name__
-            return None
+        previous = WEB_USERS_SYNC_CACHE
+        errors = []
+        # ECS images occasionally export HTTP(S)_PROXY values that cannot reach
+        # GitHub. The website sync is a direct HTTPS fetch by design.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for url in _web_users_sync_urls():
+            try:
+                with opener.open(url, timeout=5) as response:
+                    raw = response.read()
+                remote = _decrypt_web_users(json.loads(raw.decode("utf-8")))
+                WEB_USERS_SYNC_CACHE = remote
+                WEB_USERS_SYNC_LAST_SUCCESS = now
+                WEB_USERS_SYNC_LAST_ERROR = None
+                return remote
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+        # Keep the last known-good remote set for a bounded outage. This is
+        # preferable to locking every mobile user out during a transient fetch
+        # failure; a later request refreshes it after the cache window expires.
+        WEB_USERS_SYNC_LAST_ERROR = ",".join(dict.fromkeys(errors)) or "sync_failed"
+        if previous is not None and now - WEB_USERS_SYNC_LAST_SUCCESS <= WEB_USERS_SYNC_STALE_SECONDS:
+            return previous
+        return None
 
 
 def load_web_users(sync=True):
@@ -317,6 +350,10 @@ def authenticate_web_user(username, password):
     local = _read_local_web_users()
     remote = _fetch_synced_web_users()
     users = _merge_web_users(local, remote) if remote is not None else local
+    if remote is not None and users != local:
+        # Persist the last successful sync so the ECS instance can still serve
+        # mobile logins when GitHub is briefly unreachable on the next request.
+        save_web_users(users)
     user = next(
         (
             item
@@ -1174,6 +1211,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
             return self.serve_static(parsed.path)
+        if parsed.path == "/api/healthz":
+            return self.json_response({"ok": True, "service": "sparkflow-web"})
         if parsed.path == "/api/session":
             user = self.current_user()
             if not user:

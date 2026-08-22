@@ -30,12 +30,18 @@ if [ "$updated" != true ]; then
   echo "Updated project files from the GitHub source archive." >&2
 fi
 "$APP_ROOT/.venv/bin/pip" install -r requirements.txt
-systemctl enable --now sparkflow-web nginx
-systemctl restart sparkflow-web nginx
+if [ -x "$APP_ROOT/scripts/install_ecs_web_service.sh" ]; then
+  # Reconcile the unit and reverse proxy on every update. This removes the
+  # stale Xvfb/manual unit failure mode while preserving .env and user state.
+  "$APP_ROOT/scripts/install_ecs_web_service.sh"
+else
+  systemctl enable --now sparkflow-web nginx
+  systemctl restart sparkflow-web nginx
+fi
 systemctl is-active --quiet sparkflow-web nginx
 ready=false
 for attempt in $(seq 1 15); do
-  if curl -fsS -o /dev/null http://127.0.0.1:8765/; then
+  if env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY curl --noproxy '*' -fsS -o /dev/null http://127.0.0.1:8765/api/healthz; then
     ready=true
     break
   fi
@@ -46,5 +52,5 @@ if [ "$ready" != true ]; then
   journalctl -u sparkflow-web -n 80 --no-pager || true
   exit 1
 fi
-curl -fsS -o /dev/null http://127.0.0.1/
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY curl --noproxy '*' -fsS -o /dev/null http://127.0.0.1/api/healthz
 echo "SparkFlow web updated"

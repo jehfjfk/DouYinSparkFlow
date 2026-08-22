@@ -277,6 +277,27 @@ def test_web_users_sync_url_uses_raw_github_path(tmp_path, monkeypatch):
     assert web_app._web_users_sync_url() == "https://raw.githubusercontent.com/owner/repo/main/.web-users-sync.json"
 
 
+def test_web_users_sync_has_direct_mirrors_and_bypasses_proxy():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert "urllib.request.ProxyHandler({})" in source
+    assert "cdn.jsdelivr.net/gh/" in source
+
+
+def test_health_endpoint_is_public():
+    server = web_app.ThreadingHTTPServer(("127.0.0.1", 0), web_app.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_address[1]}/api/healthz", timeout=5
+        ) as response:
+            assert response.status == 200
+            assert json.loads(response.read())["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_remote_web_users_merge_keeps_local_binding():
     local = {"users": [{"username": "member", "role": "account", "accountIds": ["mine"], "salt": "local", "hash": "local"}, {"username": "deleted", "role": "account", "accountIds": [], "salt": "old", "hash": "old"}]}
     remote = {"users": [{"username": "member", "role": "account", "accountIds": [], "salt": "remote", "hash": "remote"}, {"username": "new", "role": "account", "accountIds": []}]}
