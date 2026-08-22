@@ -30,10 +30,10 @@ if [ "$updated" != true ]; then
   echo "Updated project files from the GitHub source archive." >&2
 fi
 "$APP_ROOT/.venv/bin/pip" install -r requirements.txt
-if [ -x "$APP_ROOT/scripts/install_ecs_web_service.sh" ]; then
+if [ -f "$APP_ROOT/scripts/install_ecs_web_service.sh" ]; then
   # Reconcile the unit and reverse proxy on every update. This removes the
   # stale Xvfb/manual unit failure mode while preserving .env and user state.
-  "$APP_ROOT/scripts/install_ecs_web_service.sh"
+  bash "$APP_ROOT/scripts/install_ecs_web_service.sh"
 else
   systemctl enable --now sparkflow-web nginx
   systemctl restart sparkflow-web nginx
