@@ -1279,18 +1279,35 @@ def refresh_account_login(account_id, continue_to_scan=False):
         value = json.dumps(cookies, ensure_ascii=False, separators=(",", ":"))
         write_env({f"COOKIES_{account_id.upper()}": value})
         _cache_local_config_snapshot()
-        token = github_token()
-        owner, repo = GITHUB_REPOSITORY.split("/", 1)
-        base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
-        key_info = github_request("GET", f"{base}/secrets/public-key", token)
-        github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
-            "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
-        })
-        # Keep the always-on ECS snapshot aligned when a phone user refreshes
-        # a Cookie, so its next config pull does not restore an older value.
-        sync_config_snapshot_best_effort(token)
-        update_scan_status(continue_to_scan, 80 if continue_to_scan else 100, "登录已更新，正在启动置顶好友扫描", loginUrl=None, qrImage=None)
-        return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
+        github_synced = False
+        snapshot_synced = False
+        try:
+            token = github_token()
+            owner, repo = GITHUB_REPOSITORY.split("/", 1)
+            base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
+            key_info = github_request("GET", f"{base}/secrets/public-key", token)
+            github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
+                "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
+            })
+            github_synced = True
+            # Keep the always-on ECS snapshot aligned when a phone user
+            # refreshes a Cookie, so its next config pull does not restore an
+            # older value.
+            snapshot_synced = bool(sync_config_snapshot_best_effort(token).get("ok"))
+        except Exception:
+            # The local Cookie is already usable for this ECS process. A
+            # missing GitHub credential must not turn a successful QR login
+            # into a failed login; the computer dashboard can sync it later.
+            pass
+        login_stage = "登录已更新，正在启动置顶好友扫描" if github_synced else "登录已更新（当前站点已保存 Cookie），正在启动置顶好友扫描"
+        update_scan_status(continue_to_scan, 80 if continue_to_scan else 100, login_stage, loginUrl=None, qrImage=None)
+        return {
+            "accountId": account_id,
+            "cookieCount": len(cookies),
+            "updated": True,
+            "githubSynced": github_synced,
+            "snapshotSynced": snapshot_synced,
+        }
     except Exception as exc:
         update_scan_status(False, get_scan_status()["percent"], "登录更新失败", str(exc), loginUrl=None, qrImage=None)
         raise

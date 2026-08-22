@@ -299,7 +299,8 @@ async function refreshAccountLogin(index){
     const scanResult=result?.result?.scan||loginStatus.scanResult;
     if(!scanResult){throw requestError||new Error("登录后的置顶好友扫描未完成");}
     account.cookieConfigured=true;if(result)account.cookieCount=result.result.login.cookieCount;renderAccounts();
-    state.scan=pendingScanResult(scanResult);if(state.scan.contacts.length){renderScanResults();toast(scanResult.message||"登录已更新，置顶好友扫描完成");}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("登录已更新，置顶会话均已配置");}
+    const syncHint=result?.result?.login?.githubSynced===false?"；当前站点已保存，GitHub 凭证同步待电脑端保存并同步":"";
+    state.scan=pendingScanResult(scanResult);if(state.scan.contacts.length){renderScanResults();toast((scanResult.message||"登录已更新，置顶好友扫描完成")+syncHint);}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("登录已更新，置顶会话均已配置"+syncHint);}
   }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
 }
 async function stopRun(){
