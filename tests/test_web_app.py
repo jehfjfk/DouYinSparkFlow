@@ -283,6 +283,16 @@ def test_web_users_sync_has_direct_mirrors_and_bypasses_proxy():
     assert "cdn.jsdelivr.net/gh/" in source
 
 
+def test_bundled_web_users_snapshot_can_be_used_during_sync_outage(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("WEB_USERS_SYNC_KEY=shared-key\n", encoding="utf-8")
+    monkeypatch.setattr(web_app, "ENV_FILE", env_file)
+    monkeypatch.setattr(web_app, "ROOT", tmp_path)
+    payload = web_app._encrypt_web_users({"users": [{"username": "qqq"}]})
+    (tmp_path / ".web-users-sync.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert web_app._read_bundled_web_users()["users"][0]["username"] == "qqq"
+
+
 def test_health_endpoint_is_public():
     server = web_app.ThreadingHTTPServer(("127.0.0.1", 0), web_app.Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

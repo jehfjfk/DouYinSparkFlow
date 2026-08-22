@@ -215,6 +215,23 @@ def _decrypt_web_users(payload):
     return data
 
 
+def _read_bundled_web_users():
+    """Read the encrypted user snapshot shipped with the deployed checkout.
+
+    The ECS service must remain usable during a temporary GitHub outage. The
+    snapshot is encrypted with the same sync key and is refreshed by the ECS
+    updater, so it is a safer fallback than dropping back to an older local
+    user file.
+    """
+    path = ROOT / WEB_USERS_SYNC_FILE
+    if not path.exists():
+        return None
+    try:
+        return _decrypt_web_users(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+
+
 def _merge_web_users(local, remote):
     local_by_username = {}
     for user in local.get("users", []):
@@ -267,6 +284,12 @@ def _fetch_synced_web_users():
                 return remote
             except Exception as exc:
                 errors.append(type(exc).__name__)
+        bundled = _read_bundled_web_users()
+        if bundled is not None:
+            WEB_USERS_SYNC_CACHE = bundled
+            WEB_USERS_SYNC_LAST_SUCCESS = now
+            WEB_USERS_SYNC_LAST_ERROR = ",".join(dict.fromkeys(errors)) or None
+            return bundled
         # Keep the last known-good remote set for a bounded outage. This is
         # preferable to locking every mobile user out during a transient fetch
         # failure; a later request refreshes it after the cache window expires.
