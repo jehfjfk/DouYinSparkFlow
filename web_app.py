@@ -275,7 +275,13 @@ def _fetch_synced_web_users():
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         for url in _web_users_sync_urls():
             try:
-                with opener.open(url, timeout=5) as response:
+                # The raw and CDN mirrors can cache the same path briefly after
+                # a password reset. Revalidate on every cache-window refresh.
+                request = urllib.request.Request(
+                    url,
+                    headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                )
+                with opener.open(request, timeout=5) as response:
                     raw = response.read()
                 remote = _decrypt_web_users(json.loads(raw.decode("utf-8")))
                 WEB_USERS_SYNC_CACHE = remote

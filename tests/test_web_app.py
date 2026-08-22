@@ -295,6 +295,7 @@ def test_web_users_sync_url_uses_raw_github_path(tmp_path, monkeypatch):
 def test_web_users_sync_has_direct_mirrors_and_bypasses_proxy():
     source = Path(web_app.__file__).read_text(encoding="utf-8")
     assert "urllib.request.ProxyHandler({})" in source
+    assert '"Cache-Control": "no-cache"' in source
     assert "cdn.jsdelivr.net/gh/" in source
 
 
