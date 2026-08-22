@@ -25,13 +25,37 @@ async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}
 async function manageUsers(){
   try{
     const data=await api("/api/users");
-    $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><div><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div><button class="text-button" data-delete-user="'+escapeHtml(user.username)+'" type="button">删除</button></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
+    $("#websiteUserList").innerHTML=data.users.length?data.users.map(user=>'<div class="user-list-item"><div><strong>'+escapeHtml(user.username)+'</strong><span>'+escapeHtml(user.accountIds[0]||"未绑定")+'</span></div><div class="user-list-actions"><button class="text-button" data-reset-user="'+escapeHtml(user.username)+'" type="button">修改密码</button><button class="text-button" data-delete-user="'+escapeHtml(user.username)+'" type="button">删除</button></div></div>').join(""):'<div class="empty">暂未创建独立用户</div>';
+    $$('[data-reset-user]').forEach(button=>button.addEventListener("click",()=>resetWebsiteUser(button)));
     $$('[data-delete-user]').forEach(button=>button.addEventListener("click",()=>deleteWebsiteUser(button)));
-    $("#websiteUsername").value="";$("#websitePassword").value="";$("#userFormError").textContent="";
+    $("#websiteUsername").value="";$("#websitePassword").value="";$("#userFormError").textContent="";hidePasswordReset();
     $("#userModal").classList.remove("hidden");
   }catch(error){toast(error.message,true);}
 }
 function closeUserManager(){$("#userModal").classList.add("hidden");}
+function hidePasswordReset(){
+  $("#userResetWrap").classList.add("hidden");
+  $("#resetWebsiteUsername").value="";
+  $("#resetWebsitePassword").value="";
+  $("#resetUserFormError").textContent="";
+}
+function resetWebsiteUser(button){
+  $("#resetWebsiteUsername").value=button.dataset.resetUser;
+  $("#resetWebsitePassword").value="";
+  $("#resetUserFormError").textContent="";
+  $("#userResetWrap").classList.remove("hidden");
+  $("#resetWebsitePassword").focus();
+}
+async function saveWebsiteUserPassword(event){
+  event.preventDefault();
+  $("#resetUserFormError").textContent="";
+  try{
+    const result=await api("/api/users/reset-password",{method:"POST",body:JSON.stringify({username:$("#resetWebsiteUsername").value,password:$("#resetWebsitePassword").value})});
+    hidePasswordReset();
+    if(result.webUsersSync&&!result.webUsersSync.ok)toast("密码已在电脑端修改，但尚未同步到手机端："+result.webUsersSync.error,true);
+    else toast("密码已修改并同步");
+  }catch(error){$("#resetUserFormError").textContent=error.message;}
+}
 async function deleteWebsiteUser(button){
   if(button.dataset.confirming!=="true"){
     button.dataset.confirming="true";button.textContent="确认删除";button.classList.add("confirm-delete");
@@ -309,6 +333,8 @@ function bindStaticEvents(){
   $("#logoutButton").addEventListener("click",logout);
   $("#manageUsers").addEventListener("click",manageUsers);
   $("#userForm").addEventListener("submit",saveWebsiteUser);
+  $("#resetUserForm").addEventListener("submit",saveWebsiteUserPassword);
+  $("#cancelPasswordReset").addEventListener("click",hidePasswordReset);
   $("#closeUserModal").addEventListener("click",closeUserManager);
   $("#cancelUserModal").addEventListener("click",closeUserManager);
   $$(".nav-item").forEach(button=>button.addEventListener("click",()=>switchView(button.dataset.view)));

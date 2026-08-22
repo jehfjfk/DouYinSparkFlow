@@ -261,6 +261,21 @@ def test_password_hash_round_trip(tmp_path, monkeypatch):
     assert web_app.authenticate_web_user("member", "wrongpass") is None
 
 
+def test_reset_web_user_password_preserves_binding(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "WEB_USERS_FILE", tmp_path / ".web-users.json")
+    web_app.upsert_web_user("member", "oldpass88", account_ids=["bound-account"])
+    result = web_app.reset_web_user_password("member", "newpass88")
+    assert result["accountIds"] == ["bound-account"]
+    assert web_app.authenticate_web_user("member", "oldpass88") is None
+    assert web_app.authenticate_web_user("member", "newpass88")["accountIds"] == ["bound-account"]
+
+
+def test_reset_password_endpoint_is_master_only():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert 'self.path == "/api/users/reset-password"' in source
+    assert '仅本机主账号可修改网站用户密码' in source
+
+
 def test_encrypted_web_user_sync_round_trip(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("WEB_USERS_SYNC_KEY=shared-key\n", encoding="utf-8")

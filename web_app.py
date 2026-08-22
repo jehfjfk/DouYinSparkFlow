@@ -332,6 +332,30 @@ def upsert_web_user(username, password, role="account", account_ids=None):
     return {"username": username, "role": role, "accountIds": record["accountIds"]}
 
 
+def reset_web_user_password(username, password):
+    """Reset an existing mobile user's password while retaining its binding."""
+    username = str(username or "").strip()
+    if not username or len(password or "") < 8:
+        raise ValueError("网站账号不能为空，密码至少 8 位")
+    with USER_LOCK:
+        data = load_web_users(sync=False)
+        user = next(
+            (
+                item
+                for item in data["users"]
+                if item.get("username") == username and item.get("role") == "account"
+            ),
+            None,
+        )
+        if not user:
+            raise ValueError("手机端登录账号不存在")
+        user.update(password_record(password))
+        temporary = WEB_USERS_FILE.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, WEB_USERS_FILE)
+        return {"username": username, "role": user["role"], "accountIds": list(user.get("accountIds", []))}
+
+
 def bind_web_user_account(username, account_id):
     with USER_LOCK:
         data = load_web_users(sync=False)
@@ -1298,6 +1322,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response({"error": "仅本机主账号可注册网站用户"}, 403)
                 payload = self.read_json()
                 user = upsert_web_user(payload.get("username"), payload.get("password"), "account", [])
+                return self.json_response({"ok": True, "user": user, "webUsersSync": sync_web_users_best_effort()})
+            if self.path == "/api/users/reset-password":
+                if not self.local_master():
+                    return self.json_response({"error": "仅本机主账号可修改网站用户密码"}, 403)
+                payload = self.read_json()
+                user = reset_web_user_password(payload.get("username"), payload.get("password"))
                 return self.json_response({"ok": True, "user": user, "webUsersSync": sync_web_users_best_effort()})
             if self.path == "/api/users/delete":
                 if not self.local_master():
