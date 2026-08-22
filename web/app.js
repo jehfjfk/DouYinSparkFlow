@@ -237,14 +237,14 @@ async function scanPinned(){
     state.scan=pendingScanResult(result.result);if(state.scan.contacts.length){renderScanResults();toast(result.result.message||"扫描完成，请确认后加入配置");}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("置顶会话均已配置");}
   }catch(error){toast(error.message,true);}finally{if(progressTimer)clearInterval(progressTimer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1400);}
 }
-function setScanProgress(percent,stage){
+function setScanProgress(percent,stage,verificationRequired=false){
   $("#scanProgressFill").style.width=percent+"%";
   $("#scanPercent").textContent=percent+"%";
   $("#scanStage").textContent=stage;
   const verificationForm=$("#verificationForm");
-  if(verificationForm)verificationForm.classList.toggle("hidden",!String(stage).includes("验证码"));
+  if(verificationForm)verificationForm.classList.toggle("hidden",verificationRequired!==true);
 }
-async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const pending=pendingScanResult(status.scanResult);if(!pending.contacts.length){clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});return;}const key=JSON.stringify([pending.accountIndex,pending.contacts.map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=pending;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
+async function loadScanProgress(){try{const status=await api("/api/scan-status");setScanProgress(status.percent,status.stage,status.verificationRequired);const row=$("#loginLinkRow");if(status.qrImage){$("#loginQr").src=status.qrImage;row.classList.remove("hidden");}else{row.classList.add("hidden");}if(status.scanResult){const pending=pendingScanResult(status.scanResult);if(!pending.contacts.length){clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});return;}const key=JSON.stringify([pending.accountIndex,pending.contacts.map(item=>item.uniqueId||item.shortId||item.nickname)]);if(state.scanResultKey!==key){state.scanResultKey=key;state.scan=pending;renderScanResults();switchView("accounts");setTimeout(()=>$("#scanPanel").scrollIntoView({behavior:"smooth",block:"start"}),100);}}}catch(_error){}}
 function pendingScanResult(result){const account=state.config.accounts[result.accountIndex];if(!account)return result;const configured=new Set((account.targets||[]).flatMap(target=>[target.id,...(target.aliases||[])]).filter(Boolean));return Object.assign({},result,{contacts:(result.contacts||[]).filter(item=>!configured.has(item.uniqueId||item.shortId||item.nickname||item.remark)&&![item.nickname,item.remark].filter(Boolean).some(value=>configured.has(value)))});}
 function renderScanResults(){
   $("#scanPanel").classList.remove("hidden");
@@ -296,7 +296,7 @@ async function refreshAccountLogin(index){
     if(flowVersion!==state.loginFlowVersion)return;
     let loginStatus=await api("/api/scan-status");
     const deadline=Date.now()+6*60*1000;
-    while(flowVersion===state.loginFlowVersion&&loginStatus.running&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,1500));loginStatus=await api("/api/scan-status");}
+    while(flowVersion===state.loginFlowVersion&&loginStatus.running&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,700));loginStatus=await api("/api/scan-status");}
     if(flowVersion!==state.loginFlowVersion)return;
     if(loginStatus.error)throw new Error(loginStatus.error);
     const scanResult=result?.result?.scan||loginStatus.scanResult;

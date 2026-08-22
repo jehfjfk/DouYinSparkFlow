@@ -236,6 +236,10 @@ def test_scan_progress_is_clamped_and_exposed():
     assert status["running"] is True
     assert status["percent"] == 100
     assert status["stage"] == "测试"
+    web_app.update_scan_status(True, 38, "请输入验证码", verificationRequired=True)
+    assert web_app.get_scan_status()["verificationRequired"] is True
+    web_app.update_scan_status(True, 42, "验证码已提交")
+    assert web_app.get_scan_status()["verificationRequired"] is False
 
 
 def test_login_refresh_updates_only_selected_cookie_secret():
@@ -256,6 +260,20 @@ def test_second_login_refresh_restarts_active_flow():
     assert "request_login_restart()" in source
     assert "LOGIN_LOCK.acquire(timeout=20)" in source
     assert "LoginRestartRequested" in source
+
+
+def test_login_refresh_uses_fast_commit_and_explicit_completion_signals():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert 'wait_until="commit", timeout=10000' in source
+    assert "login_signal_seen = False" in source
+    assert "qr_completed and (login_signal_seen or verification_submitted)" in source
+    assert "验证码提交后登录确认超时" in source
+
+
+def test_login_refresh_does_not_hide_verification_errors_or_restart_requests():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert 'marker in login_text for marker in ("验证码错误", "验证码无效", "验证码已过期"' in source
+    assert "except LoginRestartRequested:" in source
 
 
 def test_dashboard_uses_expiring_session_cookie(monkeypatch):

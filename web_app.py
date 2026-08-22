@@ -30,7 +30,7 @@ LOGIN_LOCK = threading.Lock()
 LOGIN_CANCEL_EVENT = threading.Event()
 USER_LOCK = threading.Lock()
 SESSIONS = {}
-SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
+SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False}
 LOGIN_PAGE = None
 LOGIN_CODE = None
 LOGIN_CODE_LOCK = threading.Lock()
@@ -1085,7 +1085,15 @@ def scan_pinned_account(account_index, finalize=True):
 
 def update_scan_status(running, percent, stage, error=None, **extra):
     with SCAN_LOCK:
-        SCAN_STATUS.update({"running": running, "percent": max(0, min(100, int(percent))), "stage": stage, "error": error})
+        SCAN_STATUS.update({
+            "running": running,
+            "percent": max(0, min(100, int(percent))),
+            "stage": stage,
+            "error": error,
+            # This is transient UI state. Reset it on every progress update so
+            # the code form disappears immediately after login confirmation.
+            "verificationRequired": bool(extra.get("verificationRequired", False)),
+        })
         SCAN_STATUS.update(extra)
 
 
@@ -1135,9 +1143,18 @@ def refresh_account_login(account_id, continue_to_scan=False):
     with LOGIN_CODE_LOCK:
         LOGIN_CODE = None
     try:
-        page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         try:
-            login_deadline = time.monotonic() + 15
+            # Waiting for the first response lets QR polling start while the
+            # creator shell continues loading its slower script bundles.
+            page.goto("https://creator.douyin.com/", wait_until="commit", timeout=10000)
+        except LoginRestartRequested:
+            raise
+        except Exception:
+            # The creator shell can finish rendering after a slow CDN request.
+            # Keep the page alive and let the QR polling below detect it.
+            pass
+        try:
+            login_deadline = time.monotonic() + 8
             clicked = False
             while time.monotonic() < login_deadline and not clicked:
                 for label in ("创作者登录", "登录"):
@@ -1145,14 +1162,16 @@ def refresh_account_login(account_id, continue_to_scan=False):
                         login_buttons = page.get_by_text(label, exact=True).all()
                         visible_button = next((button for button in reversed(login_buttons) if button.is_visible()), None)
                         if visible_button:
-                            visible_button.click(timeout=2500)
+                            visible_button.click(timeout=1200)
                             clicked = True
                             break
                     except Exception:
                         continue
                 if not clicked:
-                    page.wait_for_timeout(500)
-            page.wait_for_timeout(2500)
+                    page.wait_for_timeout(250)
+            page.wait_for_timeout(300)
+        except LoginRestartRequested:
+            raise
         except Exception:
             pass
         # Douyin has changed the login component markup several times. Prefer
@@ -1179,8 +1198,8 @@ def refresh_account_login(account_id, continue_to_scan=False):
             "canvas",
         )
         viewport = page.viewport_size or {"width": 1280, "height": 720}
-        qr_deadline = time.monotonic() + 90
-        next_qr_reload = time.monotonic() + 25
+        qr_deadline = time.monotonic() + 35
+        next_qr_reload = time.monotonic() + 12
         qr_reload_count = 0
         while qr_locator is None and time.monotonic() < qr_deadline:
             raise_if_login_restart_requested()
@@ -1190,6 +1209,10 @@ def refresh_account_login(account_id, continue_to_scan=False):
             contexts = [page]
             try:
                 contexts.extend(frame for frame in page.frames if frame != page.main_frame)
+            except LoginRestartRequested:
+                raise
+            except ValueError:
+                raise
             except Exception:
                 pass
             for frame in contexts:
@@ -1230,13 +1253,13 @@ def refresh_account_login(account_id, continue_to_scan=False):
                     qr_reload_count += 1
                     update_scan_status(True, 8, f"登录页面加载较慢，正在重试（第 {qr_reload_count} 次）", loginUrl=None, qrImage=None)
                     try:
-                        page.reload(wait_until="domcontentloaded", timeout=30000)
-                        page.wait_for_timeout(2500)
+                        page.reload(wait_until="commit", timeout=15000)
+                        page.wait_for_timeout(800)
                     except Exception:
                         pass
-                    next_qr_reload = time.monotonic() + 25
+                    next_qr_reload = time.monotonic() + 15
                 else:
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(250)
         if qr_locator is None:
             raise ValueError("未找到抖音登录二维码，请刷新登录窗口后重试")
         qr_locator.wait_for(state="visible", timeout=15000)
@@ -1254,35 +1277,54 @@ def refresh_account_login(account_id, continue_to_scan=False):
             except Exception:
                 login_url = None
         update_scan_status(True, 20, "请使用抖音扫一扫并确认登录", loginUrl=login_url or None, qrImage=qr_image or None)
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + 180
         auth_cookie_names = {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt", "uid_tt_ss"}
         qr_locked = False
         verification_seen = False
+        verification_started = False
+        verification_submitted = False
+        verification_deadline = None
+        verification_submitted_at = None
+        login_signal_seen = False
+        last_login_stage = ""
+        main_site_synced = False
         main_site_attempt = 0
         while time.monotonic() < deadline:
             raise_if_login_restart_requested()
             names = {cookie.get("name") for cookie in context.cookies()}
             identity_verification = False
             try:
-                login_text = page.locator("body").inner_text(timeout=1000)
+                login_text = page.locator("body").inner_text(timeout=300)
                 identity_verification = "身份验证" in login_text and any(
                     label in login_text for label in ("接收短信验证码", "手机刷脸验证", "验证登录密码")
                 )
-                if identity_verification:
+                if any(marker in login_text for marker in ("扫码成功", "确认登录", "登录成功", "登录完成")):
+                    login_signal_seen = True
+                    qr_locked = True
+                    if last_login_stage != "已扫码，请在手机抖音中点击确认登录":
+                        last_login_stage = "已扫码，请在手机抖音中点击确认登录"
+                        update_scan_status(True, 35, last_login_stage, qrImage=None)
+                if verification_submitted and any(
+                    marker in login_text for marker in ("验证码错误", "验证码无效", "验证码已过期", "重新获取验证码")
+                ):
+                    raise ValueError("验证码无效或已过期，请重新获取验证码")
+                if identity_verification and not verification_started:
+                    verification_started = True
                     qr_locked = True
                     verification_seen = True
                     try:
                         sms = page.get_by_text("接收短信验证码", exact=False).first
-                        sms.click(timeout=2500)
-                        page.wait_for_timeout(500)
+                        sms.click(timeout=1200)
+                        page.wait_for_timeout(300)
                         send_sms = page.get_by_text("发送短信验证", exact=False).first
-                        if send_sms.is_visible():
-                            send_sms.click(timeout=2500)
+                        if send_sms.count() and send_sms.is_visible():
+                            send_sms.click(timeout=1200)
                         update_scan_status(True, 38, "短信验证码已发送，请在手机端输入", qrImage=None, verificationRequired=True)
                     except Exception:
                         update_scan_status(True, 35, "请在手机端输入短信验证码", qrImage=None, verificationRequired=True)
                     with LOGIN_CODE_LOCK:
                         code = LOGIN_CODE
+                    submitted = False
                     if code:
                         for selector in ("input[placeholder*='验证码']", "input[placeholder*='验证']", "input[type='text']"):
                             try:
@@ -1293,15 +1335,22 @@ def refresh_account_login(account_id, continue_to_scan=False):
                                         buttons = page.get_by_text(button_text, exact=True)
                                         if buttons.count() and buttons.last.is_visible():
                                             buttons.last.click(timeout=1500)
+                                            submitted = True
                                             break
+                                    if not submitted:
+                                        field.press("Enter")
+                                        submitted = field.input_value().strip() == code
+                                    if submitted:
+                                        break
                             except Exception:
                                 continue
+                    if submitted:
                         with LOGIN_CODE_LOCK:
                             LOGIN_CODE = None
+                        verification_submitted = True
+                        verification_deadline = time.monotonic() + 45
+                        verification_submitted_at = time.monotonic()
                         update_scan_status(True, 42, "验证码已提交，正在确认登录", qrImage=None, verificationRequired=False)
-                elif "扫码成功" in login_text or "确认登录" in login_text:
-                    qr_locked = True
-                    update_scan_status(True, 35, "已扫码，请在手机抖音中点击确认登录", qrImage=None)
                 elif not qr_locked:
                     current_qr_image = qr_locator.get_attribute("src")
                     if current_qr_image and current_qr_image != qr_image:
@@ -1309,11 +1358,16 @@ def refresh_account_login(account_id, continue_to_scan=False):
                         if qr_image.startswith("blob:"):
                             qr_image = "data:image/png;base64," + base64.b64encode(qr_locator.screenshot(type="png")).decode("ascii")
                         update_scan_status(True, 20, "二维码已自动刷新，请重新扫码并确认", qrImage=qr_image)
+            except LoginRestartRequested:
+                raise
+            except ValueError:
+                raise
             except Exception:
                 pass
             with LOGIN_CODE_LOCK:
                 pending_code = LOGIN_CODE
-            if pending_code and not identity_verification:
+            if pending_code and not verification_submitted:
+                submitted = False
                 for selector in ("input[placeholder*='验证码']", "input[placeholder*='验证']", "input[aria-label*='验证码']", "input[type='text']"):
                     try:
                         field = page.locator(selector).last
@@ -1323,30 +1377,54 @@ def refresh_account_login(account_id, continue_to_scan=False):
                                 buttons = page.get_by_text(button_text, exact=True)
                                 if buttons.count() and buttons.last.is_visible():
                                     buttons.last.click(timeout=1500)
+                                    submitted = True
                                     break
-                            with LOGIN_CODE_LOCK:
-                                LOGIN_CODE = None
-                            update_scan_status(True, 42, "验证码已提交，正在确认登录", qrImage=None, verificationRequired=False)
-                            break
+                            if not submitted:
+                                field.press("Enter")
+                                submitted = field.input_value().strip() == pending_code
+                            if submitted:
+                                with LOGIN_CODE_LOCK:
+                                    LOGIN_CODE = None
+                                verification_submitted = True
+                                verification_deadline = time.monotonic() + 45
+                                verification_submitted_at = time.monotonic()
+                                update_scan_status(True, 42, "验证码已提交，正在确认登录", qrImage=None, verificationRequired=False)
+                                break
                     except Exception:
                         continue
             try:
                 qr_completed = not qr_locator.is_visible()
             except Exception:
                 qr_completed = True
-            login_confirmed = names.intersection(auth_cookie_names) or qr_completed
-            if login_confirmed and not identity_verification and (verification_seen or qr_completed):
+            # Cookie writes happen asynchronously after the creator page changes
+            # state, so do not use the snapshot taken at the start of the loop.
+            names = {cookie.get("name") for cookie in context.cookies()}
+            login_confirmed = bool(names.intersection(auth_cookie_names)) or (
+                qr_completed and (login_signal_seen or verification_submitted)
+            )
+            if verification_submitted and verification_deadline and time.monotonic() >= verification_deadline and not names.intersection(auth_cookie_names):
+                raise ValueError("验证码提交后登录确认超时，请重新点击更新登录")
+            verification_stable = bool(
+                verification_submitted and verification_submitted_at and
+                time.monotonic() - verification_submitted_at >= 2
+            )
+            if login_confirmed and (not identity_verification or names.intersection(auth_cookie_names) or verification_stable) and not main_site_synced:
                 qr_locked = True
                 main_site_attempt += 1
-                update_scan_status(True, 45, f"身份验证已通过，正在同步抖音主站（第 {main_site_attempt} 次）", loginUrl=None, qrImage=None)
-                page.goto(task_core.CHAT_URL, wait_until="domcontentloaded")
+                update_scan_status(True, 45, f"登录确认成功，正在同步抖音主站（第 {main_site_attempt} 次）", loginUrl=None, qrImage=None)
                 try:
+                    page.goto(task_core.CHAT_URL, wait_until="commit", timeout=10000)
                     task_core.wait_for_chat_ready(page, timeout=10000)
+                    main_site_synced = True
                     break
-                except (task_core.AuthenticationRequiredError, TimeoutError):
-                    page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
-                    update_scan_status(True, 45, "创作者中心已登录，正在等待主站同步", loginUrl=None, qrImage=None)
-            page.wait_for_timeout(2000)
+                except LoginRestartRequested:
+                    raise
+                except Exception:
+                    if main_site_attempt >= 2:
+                        raise ValueError("登录已确认，但抖音主站同步超时，请再次点击更新登录")
+                    update_scan_status(True, 45, "登录已确认，正在等待抖音主站同步", loginUrl=None, qrImage=None)
+                    page.wait_for_timeout(1200)
+            page.wait_for_timeout(500)
         else:
             raise ValueError("等待登录超时，请重新点击后在 5 分钟内完成登录")
 
@@ -1391,7 +1469,11 @@ def refresh_account_login(account_id, continue_to_scan=False):
         LOGIN_PAGE = None
         with LOGIN_CODE_LOCK:
             LOGIN_CODE = None
-        context.close(); browser.close(); playwright.stop()
+        for resource in (context, browser, playwright):
+            try:
+                resource.close() if resource is not playwright else resource.stop()
+            except Exception:
+                pass
 
 
 def refresh_login_and_scan(account_id):
@@ -1616,7 +1698,7 @@ class Handler(BaseHTTPRequestHandler):
             status = get_scan_status()
             allowed = self.allowed_account_ids()
             if allowed is not None and status.get("ownerAccountId") not in set(allowed):
-                status = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
+                status = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None, "verificationRequired": False}
             elif status.get("scanResult"):
                 visible = public_config(allowed)["accounts"]
                 status["scanResult"] = dict(status["scanResult"])
