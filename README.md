@@ -59,6 +59,16 @@ python web_app.py
 
 网站登录账号会同时写入加密的 `.web-users-sync.json`，手机端实例在登录时自动拉取并合并该文件。两端 `.env` 中的 `WEB_ACCESS_PASSWORD`（或单独设置的 `WEB_USERS_SYNC_KEY`）必须保持一致；该密钥只用于解密账号同步文件，不会写入 GitHub。
 
+### ECS 手机端常驻部署
+
+ECS 上的手机端不依赖电脑开机。首次部署或更新代码时，在 `/opt/DouYinSparkFlow` 执行：
+
+```bash
+bash scripts/update_ecs_web.sh
+```
+
+脚本会安装并校验 `sparkflow-web` systemd 服务和 nginx 80 端口，网站进程使用无头浏览器运行；`.env`、`.web-users.json` 和 Cookie 不会被更新脚本覆盖。健康检查地址为 `/api/healthz`。
+
 ## 📢交流讨论
 
 已开放讨论区，有疑问或展示相关成果，发布话题需求的可以加入讨论
