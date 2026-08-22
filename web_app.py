@@ -1125,11 +1125,22 @@ def refresh_account_login(account_id, continue_to_scan=False):
     try:
         page.goto("https://creator.douyin.com/", wait_until="domcontentloaded")
         try:
-            login_buttons = page.get_by_text("创作者登录", exact=True).all()
-            visible_button = next((button for button in reversed(login_buttons) if button.is_visible()), None)
-            if visible_button:
-                visible_button.click()
-            page.wait_for_timeout(1800)
+            login_deadline = time.monotonic() + 15
+            clicked = False
+            while time.monotonic() < login_deadline and not clicked:
+                for label in ("创作者登录", "登录"):
+                    try:
+                        login_buttons = page.get_by_text(label, exact=True).all()
+                        visible_button = next((button for button in reversed(login_buttons) if button.is_visible()), None)
+                        if visible_button:
+                            visible_button.click(timeout=2500)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if not clicked:
+                    page.wait_for_timeout(500)
+            page.wait_for_timeout(2500)
         except Exception:
             pass
         # Douyin has changed the login component markup several times. Prefer
@@ -1137,31 +1148,82 @@ def refresh_account_login(account_id, continue_to_scan=False):
         # or canvases instead of binding to one generated element id.
         qr_locator = None
         selectors = (
+            "#animate_qrcode_container img",
+            "#animate_qrcode_container canvas",
+            "#animate_qrcode_container",
+            "[id*='qrcode'] img",
+            "[id*='qrcode'] canvas",
+            "[id*='qrcode']",
+            "[id*='scan_code'] img",
+            "[id*='scan_code'] canvas",
+            "[id*='scan_code']",
             "#douyin_login_comp_scan_code img",
             "#douyin_login_comp_scan_code canvas",
+            "#douyin_login_comp_scan_code",
             "img[alt*='二维码'], img[alt*='扫码'], img[src*='qr']",
             "[class*='login-card-double'] img",
             "[class*='login-card-double'] canvas",
+            "img",
+            "canvas",
         )
-        qr_deadline = time.monotonic() + 25
+        viewport = page.viewport_size or {"width": 1280, "height": 720}
+        qr_deadline = time.monotonic() + 90
+        next_qr_reload = time.monotonic() + 25
+        qr_reload_count = 0
         while qr_locator is None and time.monotonic() < qr_deadline:
-            for selector in selectors:
-                candidates = page.locator(selector)
-                for index in range(candidates.count() - 1, -1, -1):
-                    candidate = candidates.nth(index)
+            # The creator page has moved the login widget between the main
+            # document and an embedded frame. Search every live frame and
+            # prefer the generated QR container before generic page images.
+            contexts = [page]
+            try:
+                contexts.extend(frame for frame in page.frames if frame != page.main_frame)
+            except Exception:
+                pass
+            for frame in contexts:
+                for selector in selectors:
                     try:
-                        if candidate.is_visible() and (candidate.get_attribute("src") or selector.endswith("canvas") or candidate.bounding_box()):
+                        candidates = frame.locator(selector)
+                        for index in range(candidates.count() - 1, -1, -1):
+                            candidate = candidates.nth(index)
+                            if not candidate.is_visible():
+                                continue
                             box = candidate.bounding_box()
                             is_square = box and abs(box["width"] - box["height"]) <= max(box["width"], box["height"]) * 0.12
-                            if box and is_square and box["width"] >= 150 and box["height"] >= 150:
+                            in_viewport = box and box["y"] + box["height"] >= 0 and box["y"] <= viewport["height"]
+                            qr_size = box and 150 <= box["width"] <= 360 and 150 <= box["height"] <= 360
+                            if not (box and is_square and qr_size and in_viewport):
+                                continue
+                            source = candidate.get_attribute("src") or ""
+                            is_qr_container = any(marker in selector for marker in ("animate_qrcode", "qrcode", "scan_code"))
+                            # A container is accepted only after its QR image
+                            # or canvas appears; this avoids selecting a
+                            # blank login-card background.
+                            if is_qr_container and not source:
+                                child = candidate.locator("img, canvas").first
+                                if not child.count():
+                                    continue
+                            if source or selector.endswith("canvas") or is_qr_container:
                                 qr_locator = candidate
                                 break
                     except Exception:
                         continue
+                    if qr_locator:
+                        break
                 if qr_locator:
                     break
             if qr_locator is None:
-                page.wait_for_timeout(500)
+                now = time.monotonic()
+                if now >= next_qr_reload and qr_reload_count < 2:
+                    qr_reload_count += 1
+                    update_scan_status(True, 8, f"登录页面加载较慢，正在重试（第 {qr_reload_count} 次）", loginUrl=None, qrImage=None)
+                    try:
+                        page.reload(wait_until="domcontentloaded", timeout=30000)
+                        page.wait_for_timeout(2500)
+                    except Exception:
+                        pass
+                    next_qr_reload = time.monotonic() + 25
+                else:
+                    page.wait_for_timeout(500)
         if qr_locator is None:
             raise ValueError("未找到抖音登录二维码，请刷新登录窗口后重试")
         qr_locator.wait_for(state="visible", timeout=15000)

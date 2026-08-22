@@ -244,6 +244,13 @@ def test_login_refresh_updates_only_selected_cookie_secret():
     assert 'f"COOKIES_{account_id.upper()}"' in source
 
 
+def test_login_qr_detection_covers_current_dynamic_creator_container():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert '"#animate_qrcode_container img"' in source
+    assert '"[id*=\'qrcode\'] img"' in source
+    assert "for frame in contexts" in source
+
+
 def test_dashboard_uses_expiring_session_cookie(monkeypatch):
     handler = object.__new__(web_app.Handler)
     token = "test-session"
