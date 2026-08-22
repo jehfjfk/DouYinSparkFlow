@@ -1,5 +1,5 @@
 function storedExpandedAccounts(){try{return new Set(JSON.parse(localStorage.getItem("expandedAccountTargets")||"[]"));}catch(_error){return new Set();}}
-const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null,overviewTargetsExpanded:localStorage.getItem("overviewTargetsExpanded")==="true",expandedAccountTargets:storedExpandedAccounts()};
+const state={config:null,status:null,session:null,view:"overview",logTimer:null,statusTimer:null,scan:null,scanResultKey:null,loginFlowVersion:0,overviewTargetsExpanded:localStorage.getItem("overviewTargetsExpanded")==="true",expandedAccountTargets:storedExpandedAccounts()};
 const titles={overview:["运行概览","检查账号状态并启动今日任务"],accounts:["账号与好友","管理登录凭证和发送范围"],message:["消息设置","编辑每天发送的消息内容"],runtime:["运行控制","调整参数并管理任务进程"],logs:["运行日志","查看任务执行详情和异常"]};
 const hitokotoOptions=["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"];
 const $=selector=>document.querySelector(selector);
@@ -283,6 +283,7 @@ async function runSingleAccount(index){
 async function refreshAccountLogin(index){
   const account=state.config.accounts[index];
   if(!account||!account.uniqueId){toast("请先填写并保存账号抖音号",true);return;}
+  const flowVersion=++state.loginFlowVersion;
   let timer=null;
   try{
     if(state.session.role==="account"&&!state.session.accountIds.length){
@@ -292,16 +293,18 @@ async function refreshAccountLogin(index){
     timer=setInterval(loadScanProgress,500);
     let result=null,requestError=null;
     try{result=await api("/api/account-login-refresh",{method:"POST",body:JSON.stringify({accountId:account.uniqueId})});}catch(error){requestError=error;}
+    if(flowVersion!==state.loginFlowVersion)return;
     let loginStatus=await api("/api/scan-status");
     const deadline=Date.now()+6*60*1000;
-    while(loginStatus.running&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,1500));loginStatus=await api("/api/scan-status");}
+    while(flowVersion===state.loginFlowVersion&&loginStatus.running&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,1500));loginStatus=await api("/api/scan-status");}
+    if(flowVersion!==state.loginFlowVersion)return;
     if(loginStatus.error)throw new Error(loginStatus.error);
     const scanResult=result?.result?.scan||loginStatus.scanResult;
     if(!scanResult){throw requestError||new Error("登录后的置顶好友扫描未完成");}
     account.cookieConfigured=true;if(result)account.cookieCount=result.result.login.cookieCount;renderAccounts();
     const syncHint=result?.result?.login?.githubSynced===false?"；当前站点已保存，GitHub 凭证同步待电脑端保存并同步":"";
     state.scan=pendingScanResult(scanResult);if(state.scan.contacts.length){renderScanResults();toast((scanResult.message||"登录已更新，置顶好友扫描完成")+syncHint);}else{clearScanResults();api("/api/scan-result/clear",{method:"POST",body:"{}"}).catch(()=>{});toast("登录已更新，置顶会话均已配置"+syncHint);}
-  }catch(error){toast(error.message,true);}finally{if(timer)clearInterval(timer);await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}
+  }catch(error){if(flowVersion===state.loginFlowVersion)toast(error.message,true);}finally{if(timer)clearInterval(timer);if(flowVersion===state.loginFlowVersion){await loadScanProgress();setTimeout(()=>$("#scanProgress").classList.add("hidden"),1800);}}
 }
 async function stopRun(){
   try{const result=await api("/api/stop",{method:"POST",body:"{}"});state.status=result.status;renderStatus();toast("任务已停止");}

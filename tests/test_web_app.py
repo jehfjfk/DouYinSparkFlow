@@ -251,6 +251,13 @@ def test_login_qr_detection_covers_current_dynamic_creator_container():
     assert "for frame in contexts" in source
 
 
+def test_second_login_refresh_restarts_active_flow():
+    source = Path(web_app.__file__).read_text(encoding="utf-8")
+    assert "request_login_restart()" in source
+    assert "LOGIN_LOCK.acquire(timeout=20)" in source
+    assert "LoginRestartRequested" in source
+
+
 def test_dashboard_uses_expiring_session_cookie(monkeypatch):
     handler = object.__new__(web_app.Handler)
     token = "test-session"

@@ -27,6 +27,7 @@ RUN_LOG_FILE = ROOT / "logs" / "web-run.log"
 ENV_LOCK = threading.Lock()
 SCAN_LOCK = threading.Lock()
 LOGIN_LOCK = threading.Lock()
+LOGIN_CANCEL_EVENT = threading.Event()
 USER_LOCK = threading.Lock()
 SESSIONS = {}
 SCAN_STATUS = {"running": False, "percent": 0, "stage": "等待扫描", "error": None, "loginUrl": None, "qrImage": None, "scanResult": None, "ownerAccountId": None}
@@ -1002,6 +1003,7 @@ def scan_pinned_account(account_index, finalize=True):
         result_keys = set()
         stable_rounds = 0
         for scan_round in range(60):
+            raise_if_login_restart_requested()
             items = conversation_list.locator(task_core.CONVERSATION_ITEM_SELECTOR).all()
             new_rows = 0
             update_scan_status(True, min(92, 55 + scan_round * 2), f"正在遍历会话列表，已读取 {len(seen_rows)} 个会话")
@@ -1032,6 +1034,7 @@ def scan_pinned_account(account_index, finalize=True):
                     identity = []
                     identity_deadline = time.monotonic() + 2
                     while time.monotonic() < identity_deadline:
+                        raise_if_login_restart_requested()
                         identity = task_core.userIDDict.get(title, [])
                         if not identity:
                             identity = next(
@@ -1094,6 +1097,15 @@ def get_scan_status():
 def clear_scan_result():
     with SCAN_LOCK:
         SCAN_STATUS["scanResult"] = None
+
+
+class LoginRestartRequested(ValueError):
+    """Raised inside an old login flow when the user starts it again."""
+
+
+def raise_if_login_restart_requested():
+    if LOGIN_CANCEL_EVENT.is_set():
+        raise LoginRestartRequested("已请求重新开始登录流程")
 
 
 def submit_login_code(code):
@@ -1171,6 +1183,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
         next_qr_reload = time.monotonic() + 25
         qr_reload_count = 0
         while qr_locator is None and time.monotonic() < qr_deadline:
+            raise_if_login_restart_requested()
             # The creator page has moved the login widget between the main
             # document and an embedded frame. Search every live frame and
             # prefer the generated QR container before generic page images.
@@ -1247,6 +1260,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
         verification_seen = False
         main_site_attempt = 0
         while time.monotonic() < deadline:
+            raise_if_login_restart_requested()
             names = {cookie.get("name") for cookie in context.cookies()}
             identity_verification = False
             try:
@@ -1382,9 +1396,14 @@ def refresh_account_login(account_id, continue_to_scan=False):
 
 def refresh_login_and_scan(account_id):
     """Finish the selected account's login, Cookie sync, and pinned scan as one recoverable job."""
-    if not LOGIN_LOCK.acquire(blocking=False):
-        raise ValueError("已有账号正在更新登录，请等待当前任务完成")
+    acquired = LOGIN_LOCK.acquire(blocking=False)
+    if not acquired:
+        request_login_restart()
+        acquired = LOGIN_LOCK.acquire(timeout=20)
+        if not acquired:
+            raise ValueError("旧的登录流程仍在退出，请再次点击更新登录")
     try:
+        LOGIN_CANCEL_EVENT.clear()
         accounts = public_config()["accounts"]
         account_index = next((index for index, item in enumerate(accounts) if item["uniqueId"] == str(account_id)), None)
         if account_index is None:
@@ -1395,6 +1414,8 @@ def refresh_login_and_scan(account_id):
                 login_result = refresh_account_login(account_id, continue_to_scan=True)
                 break
             except Exception as exc:
+                if LOGIN_CANCEL_EVENT.is_set():
+                    raise LoginRestartRequested("登录流程已重新开始") from exc
                 if attempt == 0 and "has been closed" in str(exc):
                     update_scan_status(True, 5, "登录浏览器意外中断，正在自动重建会话", error=None, loginUrl=None, qrImage=None)
                     continue
@@ -1405,7 +1426,21 @@ def refresh_login_and_scan(account_id):
         update_scan_status(False, 100, f"登录已更新并完成置顶好友扫描，识别到 {len(scan_result['contacts'])} 人", loginUrl=None, qrImage=None, scanResult=scan_result)
         return {"login": login_result, "scan": scan_result}
     finally:
-        LOGIN_LOCK.release()
+        LOGIN_CANCEL_EVENT.clear()
+        if acquired:
+            LOGIN_LOCK.release()
+
+
+def request_login_restart():
+    """Cancel the active login browser so the next request can restart it."""
+    LOGIN_CANCEL_EVENT.set()
+    page = LOGIN_PAGE
+    if page is not None:
+        try:
+            page.context.close()
+        except Exception:
+            pass
+    return {"ok": True, "restarting": True}
 
 
 class TaskRunner:
