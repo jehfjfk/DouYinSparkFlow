@@ -55,9 +55,10 @@ python web_app.py
 
 浏览器访问 `http://127.0.0.1:8765`，即可管理账号、目标好友、消息模板和运行参数，并查看任务状态及日志。服务默认仅监听本机地址，已有 Cookie 不会回显到页面。
 
-在“账号与好友”中可持续添加多个账号。每个好友填写抖音号，并可填写多个昵称或备注作为三层匹配兜底。点击“同步到 GitHub”后，`TASKS` 等普通配置会写入仓库 Environment Variables，Cookie 会通过 GitHub 公钥加密后写入 Environment Secrets；每天凌晨 4 点的工作流会自动读取全部账号。
+在“账号与好友”中可持续添加多个账号。每个好友填写抖音号，并可填写多个昵称或备注作为三层匹配兜底。点击“同步到 GitHub”后，`TASKS` 等普通配置会写入仓库 Environment Variables，Cookie 会通过 GitHub 公钥加密后写入 Environment Secrets；每天凌晨 4 点的工作流会自动读取全部账号。同步按钮还会发布加密的 `.sparkflow-config-sync.json` 快照，供常驻 ECS 手机站拉取最新任务内容，不会暴露 Cookie。
 
 网站登录账号会同时写入加密的 `.web-users-sync.json`，手机端实例在登录时自动拉取并合并该文件。两端 `.env` 中的 `WEB_ACCESS_PASSWORD`（或单独设置的 `WEB_USERS_SYNC_KEY`）必须保持一致；该密钥只用于解密账号同步文件，不会写入 GitHub。
+ECS 的 systemd 服务通过 `SPARKFLOW_CONFIG_PULL=1` 开启配置快照拉取；本机电脑端默认关闭，避免编辑中的本地配置被远端旧快照覆盖。
 
 ### ECS 手机端常驻部署
 

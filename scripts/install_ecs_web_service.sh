@@ -49,6 +49,7 @@ WorkingDirectory=$APP_ROOT
 Environment=HOME=/home/$APP_USER
 Environment=PYTHONUNBUFFERED=1
 Environment=SPARKFLOW_HEADLESS=1
+Environment=SPARKFLOW_CONFIG_PULL=1
 Environment=PLAYWRIGHT_BROWSERS_PATH=$APP_ROOT/chrome
 EnvironmentFile=-$APP_ROOT/.env
 ExecStart=$PYTHON -u $APP_ROOT/web_app.py --host 127.0.0.1 --port 8765

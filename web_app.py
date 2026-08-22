@@ -36,6 +36,7 @@ LOGIN_CODE_LOCK = threading.Lock()
 GITHUB_REPOSITORY = os.getenv("SPARKFLOW_GITHUB_REPOSITORY", "jehfjfk/DouYinSparkFlow")
 GITHUB_ENVIRONMENT = os.getenv("SPARKFLOW_GITHUB_ENVIRONMENT", "user-data")
 WEB_USERS_SYNC_FILE = ".web-users-sync.json"
+CONFIG_SYNC_FILE = ".sparkflow-config-sync.json"
 WEB_USERS_SYNC_CACHE_SECONDS = 15
 WEB_USERS_SYNC_STALE_SECONDS = 86400
 WEB_USERS_SYNC_LOCK = threading.Lock()
@@ -43,6 +44,18 @@ WEB_USERS_SYNC_LAST_CHECK = 0.0
 WEB_USERS_SYNC_LAST_SUCCESS = 0.0
 WEB_USERS_SYNC_CACHE = None
 WEB_USERS_SYNC_LAST_ERROR = None
+CONFIG_SYNC_CACHE_SECONDS = 30
+CONFIG_SYNC_STALE_SECONDS = 86400
+CONFIG_SYNC_LOCK = threading.Lock()
+CONFIG_SYNC_LAST_CHECK = 0.0
+CONFIG_SYNC_LAST_SUCCESS = 0.0
+CONFIG_SYNC_CACHE = None
+CONFIG_SYNC_LAST_ERROR = None
+CONFIG_SYNC_KEYS = (
+    "TASKS", "MESSAGE_TEMPLATE", "HITOKOTO_TYPES", "MATCH_MODE",
+    "BROWSER_TIMEOUT", "FRIEND_LIST_WAIT_TIME", "TASK_RETRY_TIMES",
+    "SCHEDULE_TIME", "LOG_LEVEL", "PROXY_ADDRESS",
+)
 
 
 def read_env():
@@ -90,6 +103,7 @@ def parse_json(value, fallback):
 
 
 def public_config(allowed_account_ids=None):
+    refresh_config_from_sync()
     env = read_env()
     tasks = parse_json(env.get("TASKS", "[]"), [])
     accounts = []
@@ -179,6 +193,170 @@ def _web_users_sync_urls():
         f"https://github.com/{quote(owner)}/{quote(repo)}/raw/refs/heads/{quote(ref, safe='')}/{relative}",
     ]
     return list(dict.fromkeys(mirrors))
+
+
+def _config_sync_enabled():
+    """Only the deployed ECS service pulls the encrypted config snapshot."""
+    if ENV_FILE != ROOT / ".env":
+        return False
+    value = os.getenv("SPARKFLOW_CONFIG_PULL") or read_env().get("SPARKFLOW_CONFIG_PULL", "")
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _config_sync_urls():
+    env = read_env()
+    configured = env.get("SPARKFLOW_CONFIG_SYNC_URL", "").strip()
+    repository = env.get("SPARKFLOW_GITHUB_REPOSITORY", GITHUB_REPOSITORY)
+    ref = env.get("WEB_USERS_SYNC_REF", "main").strip() or "main"
+    owner, repo = (repository.split("/", 1) + [""])[:2]
+    if not repo:
+        owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    relative = quote(CONFIG_SYNC_FILE.lstrip("/"), safe="")
+    primary = configured or (
+        "https://raw.githubusercontent.com/"
+        f"{quote(owner)}/{quote(repo)}/{quote(ref, safe='')}/{relative}"
+    )
+    mirrors = [
+        primary,
+        f"https://cdn.jsdelivr.net/gh/{quote(owner)}/{quote(repo)}@{quote(ref, safe='')}/{relative}",
+        f"https://github.com/{quote(owner)}/{quote(repo)}/raw/refs/heads/{quote(ref, safe='')}/{relative}",
+    ]
+    return list(dict.fromkeys(mirrors))
+
+
+def _config_snapshot_values(env=None):
+    env = env or read_env()
+    values = {key: env[key] for key in CONFIG_SYNC_KEYS if key in env}
+    tasks = parse_json(env.get("TASKS", "[]"), [])
+    for task in tasks if isinstance(tasks, list) else []:
+        account_id = str(task.get("unique_id", "")).strip() if isinstance(task, dict) else ""
+        if not account_id:
+            continue
+        key = f"COOKIES_{account_id.upper()}"
+        if key in env:
+            values[key] = env[key]
+    return values
+
+
+def _encrypt_config_snapshot(values):
+    key = _web_users_sync_key()
+    if not key:
+        raise ValueError("缺少 WEB_USERS_SYNC_KEY 或 WEB_ACCESS_PASSWORD")
+    try:
+        from nacl.secret import SecretBox
+    except ImportError as exc:
+        raise ValueError("缺少 PyNaCl 依赖，请运行 pip install -r requirements.txt") from exc
+    box = SecretBox(key)
+    body = {"version": 1, "values": values, "updatedAt": int(time.time())}
+    encrypted = box.encrypt(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return {
+        "version": 1,
+        "algorithm": "xsalsa20poly1305",
+        "payload": base64.b64encode(bytes(encrypted)).decode("ascii"),
+    }
+
+
+def _decrypt_config_snapshot(payload):
+    if not isinstance(payload, dict) or payload.get("version") != 1 or not payload.get("payload"):
+        raise ValueError("配置同步文件格式错误")
+    key = _web_users_sync_key()
+    if not key:
+        raise ValueError("缺少 WEB_USERS_SYNC_KEY 或 WEB_ACCESS_PASSWORD")
+    try:
+        from nacl.secret import SecretBox
+    except ImportError as exc:
+        raise ValueError("缺少 PyNaCl 依赖，请运行 pip install -r requirements.txt") from exc
+    box = SecretBox(key)
+    body = json.loads(box.decrypt(base64.b64decode(payload["payload"])).decode("utf-8"))
+    values = body.get("values") if isinstance(body, dict) else None
+    if body.get("version") != 1 or not isinstance(values, dict):
+        raise ValueError("配置同步内容格式错误")
+    return {str(key): str(value) for key, value in values.items()}
+
+
+def _read_bundled_config_snapshot():
+    path = ROOT / CONFIG_SYNC_FILE
+    if not path.exists():
+        return None
+    try:
+        return _decrypt_config_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+
+
+def _fetch_synced_config():
+    global CONFIG_SYNC_LAST_CHECK, CONFIG_SYNC_LAST_SUCCESS, CONFIG_SYNC_CACHE, CONFIG_SYNC_LAST_ERROR
+    if not _config_sync_enabled():
+        return None
+    now = time.time()
+    with CONFIG_SYNC_LOCK:
+        if now - CONFIG_SYNC_LAST_CHECK < CONFIG_SYNC_CACHE_SECONDS:
+            return CONFIG_SYNC_CACHE
+        CONFIG_SYNC_LAST_CHECK = now
+        previous = CONFIG_SYNC_CACHE
+        errors = []
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for url in _config_sync_urls():
+            try:
+                separator = "&" if "?" in url else "?"
+                request = urllib.request.Request(
+                    f"{url}{separator}v={int(now)}",
+                    headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                )
+                with opener.open(request, timeout=8) as response:
+                    raw = response.read()
+                values = _decrypt_config_snapshot(json.loads(raw.decode("utf-8")))
+                CONFIG_SYNC_CACHE = values
+                CONFIG_SYNC_LAST_SUCCESS = now
+                CONFIG_SYNC_LAST_ERROR = None
+                return values
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+        bundled = _read_bundled_config_snapshot()
+        if bundled is not None:
+            CONFIG_SYNC_CACHE = bundled
+            CONFIG_SYNC_LAST_SUCCESS = now
+            CONFIG_SYNC_LAST_ERROR = ",".join(dict.fromkeys(errors)) or None
+            return bundled
+        CONFIG_SYNC_LAST_ERROR = ",".join(dict.fromkeys(errors)) or "sync_failed"
+        if previous is not None and now - CONFIG_SYNC_LAST_SUCCESS <= CONFIG_SYNC_STALE_SECONDS:
+            return previous
+        return None
+
+
+def refresh_config_from_sync():
+    """Apply the desktop-published config to the ECS local runtime state."""
+    remote = _fetch_synced_config()
+    if not remote:
+        return False
+    tasks = parse_json(remote.get("TASKS"), None)
+    if not isinstance(tasks, list):
+        return False
+    updates = {key: remote[key] for key in CONFIG_SYNC_KEYS if key in remote}
+    updates.update({key: value for key, value in remote.items() if key.startswith("COOKIES_")})
+    remote_cookie_keys = {key for key in remote if key.startswith("COOKIES_")}
+    local = read_env()
+    delete_keys = []
+    if remote_cookie_keys or "TASKS" in remote:
+        delete_keys = [
+            key for key in local
+            if key.startswith("COOKIES_") and key not in remote_cookie_keys
+        ]
+    before = {key: local.get(key) for key in set(updates) | set(delete_keys)}
+    after = {key: updates.get(key) for key in before}
+    if all(key in updates and before.get(key) == after.get(key) for key in before if key not in delete_keys) and not delete_keys:
+        return False
+    write_env(updates, delete_keys)
+    return True
+
+
+def _cache_local_config_snapshot():
+    """Prevent a just-saved ECS edit from being replaced by its old remote cache."""
+    global CONFIG_SYNC_LAST_CHECK, CONFIG_SYNC_CACHE
+    if not _config_sync_enabled():
+        return
+    CONFIG_SYNC_CACHE = _config_snapshot_values(read_env())
+    CONFIG_SYNC_LAST_CHECK = time.time()
 
 
 def _encrypt_web_users(data):
@@ -400,6 +578,7 @@ def authenticate_web_user(username, password):
     username = str(username or "").strip()
     if not username or password is None:
         return None
+    refresh_config_from_sync()
     local = _read_local_web_users()
     remote = _fetch_synced_web_users()
     users = _merge_web_users(local, remote) if remote is not None else local
@@ -497,6 +676,7 @@ def save_config(payload):
         if str(task.get("unique_id", "")).upper() not in active_ids
     }
     write_env(updates, removed_cookie_keys)
+    _cache_local_config_snapshot()
     return public_config()
 
 
@@ -638,6 +818,38 @@ def sync_web_users_best_effort():
         return {"ok": False, "error": str(exc)}
 
 
+def sync_config_snapshot(token=None):
+    """Publish encrypted TASKS/settings/Cookies for the always-on ECS site."""
+    token = token or github_token()
+    owner, repo = GITHUB_REPOSITORY.split("/", 1)
+    env = read_env()
+    branch = env.get("WEB_USERS_SYNC_REF", "main").strip() or "main"
+    content = json.dumps(_encrypt_config_snapshot(_config_snapshot_values(env)), ensure_ascii=False, indent=2).encode("utf-8")
+    base = f"/repos/{owner}/{repo}/contents/{quote(CONFIG_SYNC_FILE)}"
+    current = None
+    try:
+        current = github_request("GET", f"{base}?ref={quote(branch)}", token)
+    except ValueError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    payload = {
+        "message": "chore: sync encrypted web config snapshot",
+        "content": base64.b64encode(content).decode("ascii"),
+        "branch": branch,
+    }
+    if current and current.get("sha"):
+        payload["sha"] = current["sha"]
+    github_request("PUT", base, token, payload)
+    return {"file": CONFIG_SYNC_FILE, "branch": branch}
+
+
+def sync_config_snapshot_best_effort(token=None):
+    try:
+        return {"ok": True, "result": sync_config_snapshot(token)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def encrypted_secret(value, public_key):
     try:
         from nacl import encoding, public
@@ -709,12 +921,17 @@ def sync_github(allowed_account_ids=None):
             deleted_secrets.append(name)
 
     web_users = sync_web_users_best_effort() if allowed_account_ids is None else None
+    # The ECS snapshot contains the complete local state. Scoped users still
+    # publish it after their account-only merge, leaving unrelated accounts
+    # unchanged while keeping their edits available after an ECS restart.
+    config_snapshot = sync_config_snapshot_best_effort(token)
     return {
         "repository": GITHUB_REPOSITORY,
         "accounts": len(synced_tasks),
         "secrets": len(active_secrets),
         "deletedSecrets": deleted_secrets,
         "webUsers": web_users,
+        "configSnapshot": config_snapshot,
     }
 
 
@@ -1061,6 +1278,7 @@ def refresh_account_login(account_id, continue_to_scan=False):
         cookies = context.cookies()
         value = json.dumps(cookies, ensure_ascii=False, separators=(",", ":"))
         write_env({f"COOKIES_{account_id.upper()}": value})
+        _cache_local_config_snapshot()
         token = github_token()
         owner, repo = GITHUB_REPOSITORY.split("/", 1)
         base = f"/repos/{owner}/{repo}/environments/{GITHUB_ENVIRONMENT}"
@@ -1068,6 +1286,9 @@ def refresh_account_login(account_id, continue_to_scan=False):
         github_request("PUT", f"{base}/secrets/COOKIES_{account_id.upper()}", token, {
             "encrypted_value": encrypted_secret(value, key_info["key"]), "key_id": key_info["key_id"],
         })
+        # Keep the always-on ECS snapshot aligned when a phone user refreshes
+        # a Cookie, so its next config pull does not restore an older value.
+        sync_config_snapshot_best_effort(token)
         update_scan_status(continue_to_scan, 80 if continue_to_scan else 100, "登录已更新，正在启动置顶好友扫描", loginUrl=None, qrImage=None)
         return {"accountId": account_id, "cookieCount": len(cookies), "updated": True}
     except Exception as exc:

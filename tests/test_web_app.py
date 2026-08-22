@@ -66,6 +66,34 @@ def test_existing_cookie_is_preserved_when_form_leaves_it_blank(isolated_env):
     assert json.loads(web_app.read_env()["COOKIES_MINE"])[0]["value"] == "secret"
 
 
+def test_config_snapshot_round_trip(isolated_env):
+    isolated_env.write_text("WEB_ACCESS_PASSWORD=shared-key\n", encoding="utf-8")
+    values = {"TASKS": '[{"unique_id":"mine","targets":[]}]', "COOKIES_MINE": cookie_json()}
+    encrypted = web_app._encrypt_config_snapshot(values)
+    assert web_app._decrypt_config_snapshot(encrypted) == values
+
+
+def test_refresh_config_from_sync_updates_tasks_and_removes_deleted_cookies(isolated_env, monkeypatch):
+    isolated_env.write_text(
+        'TASKS=[{"unique_id":"old","targets":[]}]\n'
+        + "COOKIES_OLD=" + cookie_json() + "\nCOOKIES_STALE=" + cookie_json() + "\n",
+        encoding="utf-8",
+    )
+    remote = {
+        "TASKS": '[{"unique_id":"mine","message_template":"新消息","targets":[{"id":"friend"}]}]',
+        "MESSAGE_TEMPLATE": "续火花",
+        "COOKIES_MINE": cookie_json(),
+    }
+    monkeypatch.setattr(web_app, "_config_sync_enabled", lambda: True)
+    monkeypatch.setattr(web_app, "_fetch_synced_config", lambda: remote)
+    assert web_app.refresh_config_from_sync() is True
+    env = web_app.read_env()
+    assert json.loads(env["TASKS"])[0]["unique_id"] == "mine"
+    assert env["COOKIES_MINE"] == cookie_json()
+    assert "COOKIES_OLD" not in env
+    assert "COOKIES_STALE" not in env
+
+
 def test_legacy_string_targets_are_exposed_as_structured_targets(isolated_env):
     isolated_env.write_text(
         'TASKS=[{"username":"我","unique_id":"mine","targets":["friend"]}]\n',
