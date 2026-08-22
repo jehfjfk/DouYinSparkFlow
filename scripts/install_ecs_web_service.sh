@@ -81,6 +81,16 @@ server {
     }
 }
 NGINX
+# Keep this instance's dashboard as the only enabled HTTP default. Older
+# deployments may have renamed the distro default site, so disable every
+# other enabled file that still declares an 80/tcp default server.
+for enabled in /etc/nginx/sites-enabled/*; do
+  [ -e "$enabled" ] || [ -L "$enabled" ] || continue
+  [ "$enabled" = "/etc/nginx/sites-enabled/sparkflow-web" ] && continue
+  if grep -Eq 'listen[[:space:]]+[^;]*(:80|[[:space:]]80)[^;]*default_server|listen[[:space:]]+[^;]*default_server[^;]*(:80|[[:space:]]80)' "$enabled" 2>/dev/null; then
+    mv -f "$enabled" "${enabled}.sparkflow-disabled"
+  fi
+done
 if [ -e /etc/nginx/sites-enabled/default ] || [ -L /etc/nginx/sites-enabled/default ]; then
   mv -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/default.sparkflow-disabled
 fi
